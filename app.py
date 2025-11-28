@@ -2225,37 +2225,28 @@ def page_teacher_management(current_username: str, current_role: str):
 
     st.header("講師アカウント管理")
 
+    # users シート読み込み（空の場合のカラム保証もしておく）
     users_df = load_sheet_df("users")
     if users_df.empty:
-        # 空シート対策：最低限のカラムをそろえる
-        users_df = pd.DataFrame(columns=["username", "name", "password_hash", "role"])
+        users_df = pd.DataFrame(
+            columns=["username", "name", "password_hash", "role"]
+        )
 
-    # =========================
-    # ① 登録済み講師一覧（password_hash 非表示）
-    # =========================
+    # 一覧表示用に、ハッシュは隠して username / name / role だけ出す
+    display_df = users_df[["username", "name", "role"]].copy()
+    display_df = display_df.rename(
+        columns={
+            "username": "ユーザー名",
+            "name": "講師名",
+            "role": "権限",
+        }
+    )
     st.subheader("登録済み講師一覧")
-
-    display_df = users_df.copy()
-
-    # 表示用に password_hash を削除
-    if "password_hash" in display_df.columns:
-        display_df = display_df.drop(columns=["password_hash"])
-
-    # 表示順を整える（存在するものだけ）
-    preferred_cols = ["username", "name", "role"]
-    cols = [c for c in preferred_cols if c in display_df.columns] + [
-        c for c in display_df.columns if c not in preferred_cols
-    ]
-    display_df = display_df[cols]
-
     st.dataframe(display_df, use_container_width=True)
 
-    # =========================
-    # ② 新規講師登録
-    # =========================
+    # ---------------- 新規講師登録 ----------------
     st.markdown("---")
     st.subheader("新規講師登録")
-
     col1, col2, col3 = st.columns(3)
     with col1:
         new_username = st.text_input("ユーザー名")
@@ -2270,8 +2261,8 @@ def page_teacher_management(current_username: str, current_role: str):
         elif (users_df["username"] == new_username).any():
             st.error("このユーザー名は既に使用されています。")
         else:
-            # ★ ここが修正ポイント：Hasher の正しい使い方
-            hashed = stauth.Hasher([new_password]).generate()[0]
+            # ★ 新しい書き方：Hasher.hash(平文パスワード)
+            hashed = stauth.Hasher.hash(new_password)
 
             new_row = {
                 "username": new_username,
@@ -2285,9 +2276,7 @@ def page_teacher_management(current_username: str, current_role: str):
             time.sleep(1)
             st.rerun()
 
-    # =========================
-    # ③ パスワードリセット / アカウント削除
-    # =========================
+    # ---------------- パスワードリセット / アカウント削除 ----------------
     st.markdown("---")
     st.subheader("パスワードリセット / アカウント削除")
 
@@ -2299,24 +2288,24 @@ def page_teacher_management(current_username: str, current_role: str):
     selected_user = st.selectbox("対象ユーザーを選択", usernames)
 
     target_row = users_df[users_df["username"] == selected_user].iloc[0]
-    st.write(f"名前: {target_row.get('name','')}, 権限: {target_row.get('role','')}")
+    st.write(f"名前: {target_row.get('name', '')}, 権限: {target_row.get('role', '')}")
 
-    # ---- パスワード変更 ----
+    # パスワード変更
     new_pw = st.text_input("新しいパスワード（変更しない場合は空欄）", type="password")
     if st.button("パスワードを変更", key="change_pw"):
         if not new_pw:
             st.error("新しいパスワードを入力してください。")
         else:
-            # ★ ここも Hasher の正しい使い方に修正
-            hashed = stauth.Hasher([new_pw]).generate()[0]
+            # ★ ここも必ず new_pw をハッシュ、generate() は使わない
+            hashed = stauth.Hasher.hash(new_pw)
             idx = users_df[users_df["username"] == selected_user].index[0]
             users_df.at[idx, "password_hash"] = hashed
             write_sheet_df("users", users_df)
             st.success("パスワードを変更しました。")
 
-    # ---- アカウント削除 ----
+    # アカウント削除
     st.markdown("---")
-    st.markdown("**アカウント削除（master は削除できません）**")
+    st.markdown("**アカウント削除（masterは削除できません）**")
     if selected_user == "master":
         st.info("master アカウントは削除できません。")
     else:
@@ -2326,6 +2315,7 @@ def page_teacher_management(current_username: str, current_role: str):
             st.success("アカウントを削除しました。")
             time.sleep(1)
             st.rerun()
+
 
 
 # ==========
