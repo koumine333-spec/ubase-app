@@ -2334,7 +2334,12 @@ def page_teacher_management(current_username: str, current_role: str):
 
 def main():
     # ページ設定（最初の Streamlit 呼び出し）
-    st.set_page_config(page_title="U-BASE", layout="wide")
+    st.set_page_config(
+        page_title="U-BASE オンライン指導のウルクス生徒 管理システム",  # ブラウザのタブに出るタイトル
+        page_icon="ulucusicon.png",                         # タブのアイコン
+        layout="wide"
+    )
+
 
     # 共通CSS
     inject_base_css()
