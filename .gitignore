@@ -1,0 +1,21 @@
+# Python が生成するキャッシュ
+__pycache__/
+*.pyc
+
+# 仮想環境（あれば）
+venv/
+.env/
+.venv/
+
+# Streamlit/秘密設定（ローカル）
+.streamlit/
+
+# Google サービスアカウントなど秘密情報
+*.json
+
+# その他ログ・一時ファイル
+*.log
+
+# ピンポイントで除外したい場合
+service_account.json
+credentials.json

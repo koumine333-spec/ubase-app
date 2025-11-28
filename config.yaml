@@ -1,0 +1,16 @@
+cookie:
+  expiry_days: 7
+  key: u_base_secret_key123
+  name: u_base_cookie
+credentials:
+  usernames:
+    Ko Morishita:
+      name: 森下 航
+      password: $2b$12$2uzewPwb9ivhC0Sav0YNqOw3iKTWrMO8HsSKJqjUW9T0/CrM1Zfde
+      role: teacher
+    master:
+      name: 管理者
+      password: $2b$12$2jx5dF8quCEI0.qnkqNyRePTi1Girg8umjSBRlSd2JCD33i0Ap8tK
+      role: master
+preauthorized:
+  emails: []
