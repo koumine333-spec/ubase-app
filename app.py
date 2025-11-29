@@ -512,6 +512,10 @@ PROMOTION_MAP = {
     "高2": "高3",
 }
 
+def promote_grade_value(grade: str) -> str:
+    """1つの学年を進級させる。マップに無いものはそのまま返す。"""
+    return PROMOTION_MAP.get(grade, grade)
+
 
 # ==========
 # CSS / テーマ
@@ -625,13 +629,20 @@ def page_student_management(current_role: str):
 
     students_df = get_students_df()
 
+    # ----------------------
     # 新規登録
+    # ----------------------
     st.subheader("新規生徒登録")
 
     col1, col2 = st.columns(2)
     with col1:
         name = st.text_input("生徒名")
-        grade = st.selectbox("学年", ["中学生", "高校生"])
+
+        # ★ 学年は GRADE_CHOICES から選択（例: 中1, 高2 など）
+        #   初期値は「中1」にしておく（お好みで変更OK）
+        default_grade = "中1" if "中1" in GRADE_CHOICES else GRADE_CHOICES[0]
+        grade = st.selectbox("学年", GRADE_CHOICES, index=GRADE_CHOICES.index(default_grade))
+
     with col2:
         school_name = st.text_input("学校名")
         target_school = st.text_input("志望校")
@@ -639,29 +650,35 @@ def page_student_management(current_role: str):
     admission_goal = st.text_area(
         "入塾時の目標",
         height=80,
-        key="new_admission_goal",  
+        key="new_admission_goal",
     )
 
     student_login_id = st.text_input("生徒ID（生徒用ログインID・任意）")
 
     # 科目
     st.markdown("#### 科目設定")
-    if grade == "中学生":
+    if grade.startswith("中"):  # 中学生
         subjects = JUNIOR_SUBJECTS
         st.write("中学生は以下の5科目が自動設定されます：", "、".join(subjects))
         mock_subjects = []
-    else:
+    elif grade.startswith("高") or grade == "既卒":  # 高校生・既卒
         st.write("定期テスト科目（高校）")
         regular_selected = st.multiselect("定期テスト科目を選択", HIGH_REGULAR_SUBJECTS)
         st.write("模試受験科目（共通テスト系）")
         mock_selected = st.multiselect("模試受験科目を選択", HIGH_MOCK_SUBJECTS)
         subjects = regular_selected
         mock_subjects = mock_selected
+    else:
+        # 小学生など → とりあえず中学生と同じ5科目をデフォルトにしておく（必要に応じてカスタマイズ）
+        subjects = JUNIOR_SUBJECTS
+        mock_subjects = []
+        st.write("小学生は暫定的に以下の科目を設定しています：", "、".join(subjects))
 
     if st.button("生徒を登録", key="register_student"):
         if not name:
             st.error("生徒名を入力してください。")
         else:
+            # ★ student_id は generate_new_student_id で一意に決定（削除しても再利用しない前提）
             new_id = generate_new_student_id(students_df)
             new_row = {
                 "student_id": str(new_id),
@@ -684,7 +701,7 @@ def page_student_management(current_role: str):
     st.markdown("---")
     st.markdown("### 生徒一覧")
 
-    # 最新の生徒データを取得（再読み込みしておくと安心）
+    # 最新の生徒データを取得（再読み込み）
     students_df = get_students_df()
     if "student_id" in students_df.columns:
         students_df["student_id"] = students_df["student_id"].astype(str)
@@ -704,12 +721,11 @@ def page_student_management(current_role: str):
             "subjects",
             "mock_subjects",
         ]
-        # 実際に存在するカラムだけに絞る
         display_cols = [c for c in display_cols if c in students_df.columns]
 
         df_disp = students_df[display_cols].copy()
 
-        # JSON カラムは見やすいように文字列化
+        # JSON カラムは見やすいように文字列化（そのまま表示）
         for col in ["subjects", "mock_subjects"]:
             if col in df_disp.columns:
                 df_disp[col] = df_disp[col].fillna("").astype(str)
@@ -730,19 +746,18 @@ def page_student_management(current_role: str):
 
         st.dataframe(df_disp, use_container_width=True)
 
-        # ----------------------
-    # 登録済み生徒の一覧表示
+    # ----------------------
+    # 登録済み生徒の一覧（簡易）
     # ----------------------
     st.markdown("---")
-    st.subheader("登録済み生徒一覧")
+    st.subheader("登録済み生徒一覧（簡易表示）")
 
     students_df = get_students_df()
     if students_df.empty:
         st.info("生徒が登録されていません。")
         return
 
-    # 表示用に最低限の列だけ並べる
-    display_df = students_df[["student_id", "name", "grade", "school_name", "target_school"]]
+    display_df = students_df[["student_id", "name", "grade", "school_name", "target_school"]].copy()
     display_df = display_df.rename(
         columns={
             "student_id": "生徒ID",
@@ -755,12 +770,11 @@ def page_student_management(current_role: str):
     st.dataframe(display_df, use_container_width=True)
 
     # ----------------------
-    # 既存生徒の情報編集（学年・目標など）
+    # 既存生徒の情報編集（同じIDのまま学年・目標など更新）
     # ----------------------
     st.markdown("---")
     st.subheader("生徒情報の編集（同じIDで学年・目標を更新）")
 
-    # student_id を文字列にそろえる
     if "student_id" in students_df.columns:
         students_df["student_id"] = students_df["student_id"].astype(str)
 
@@ -768,6 +782,10 @@ def page_student_management(current_role: str):
         f'{row["student_id"]} : {row["name"]}'
         for _, row in students_df.iterrows()
     ]
+
+    if not edit_options:
+        st.info("編集可能な生徒がいません。")
+        return
 
     selected_label = st.selectbox(
         "編集する生徒を選択",
@@ -787,7 +805,6 @@ def page_student_management(current_role: str):
             key="edit_name",
         )
 
-        # 学年：選択式
         current_grade = target_row.get("grade", "")
         if current_grade in GRADE_CHOICES:
             grade_index = GRADE_CHOICES.index(current_grade)
@@ -821,7 +838,7 @@ def page_student_management(current_role: str):
             key="edit_student_login_id",
         )
 
-    # 入塾時の目標（text_area は新規登録と key を分ける）
+    # 入塾時の目標
     edit_admission_goal = st.text_area(
         "入塾時の目標",
         value=target_row.get("admission_goal", ""),
@@ -829,13 +846,14 @@ def page_student_management(current_role: str):
         key="edit_admission_goal",
     )
 
-    # ---------------- 進級ボタン（必要なら使う） ----------------
-    st.markdown("#### 学年の自動進級（オプション）")
+    # ---------------- 進級ボタン（単一生徒） ----------------
+    st.markdown("#### 学年の自動進級（この生徒だけ）")
 
-    next_grade = PROMOTION_MAP.get(current_grade, "")
-    if next_grade:
+    next_grade = promote_grade_value(current_grade)
+    if next_grade != current_grade:
         st.write(f"現在の学年: **{current_grade}** → 次の学年候補: **{next_grade}**")
         if st.button("この生徒を進級させる（学年だけ自動更新）", key="promote_single_student"):
+            # 表示上の選択を更新
             edit_grade = next_grade
             st.info(f"画面上の学年を「{next_grade}」に変更しました。このあと『生徒情報を更新』を押して保存してください。")
     else:
@@ -845,7 +863,7 @@ def page_student_management(current_role: str):
     if st.button("生徒情報を更新", key="update_student"):
         idx = students_df[students_df["student_id"] == selected_id].index[0]
 
-        # ★ 同じ student_id のまま、学年・目標だけを上書き
+        # 同じ student_id のまま、各情報を上書き
         students_df.at[idx, "name"] = edit_name
         students_df.at[idx, "grade"] = edit_grade
         students_df.at[idx, "school_name"] = edit_school_name
@@ -853,20 +871,68 @@ def page_student_management(current_role: str):
         students_df.at[idx, "admission_goal"] = edit_admission_goal
         students_df.at[idx, "student_login_id"] = edit_student_login_id
 
-        # subjects / mock_subjects はそのまま触らない（必要なら別UIで編集）
         write_sheet_df("students", students_df)
 
         st.success("生徒情報を更新しました。（ID はそのまま、学年・目標のみ変更）")
         time.sleep(0.5)
         st.rerun()
 
+    # ----------------------
+    # 学年一括更新（master専用）
+    # ----------------------
+    if current_role == "master":
+        st.markdown("---")
+        st.subheader("学年一括更新（年度切り替え）")
 
+        st.info(
+            "毎年の年度切り替え時に使う機能です。\n\n"
+            "- 例: 小6→中1, 中1→中2, 中2→中3, 中3→高1, 高1→高2, 高2→高3\n"
+            "- 進級させたい学年だけを選択して「進級を実行」を押してください。"
+        )
+
+        target_grades = st.multiselect(
+            "進級させる学年を選択",
+            GRADE_CHOICES,
+            default=["小6", "中1", "中2", "中3", "高1", "高2"],
+        )
+
+        if st.button("上記の学年を一括で進級させる", key="btn_bulk_grade_promotion"):
+            if not target_grades:
+                st.error("進級対象の学年を1つ以上選択してください。")
+            else:
+                students_df_all = get_students_df().copy()
+                if students_df_all.empty or "grade" not in students_df_all.columns:
+                    st.error("生徒データが存在しないか、grade列がありません。")
+                else:
+                    mask = students_df_all["grade"].isin(target_grades)
+                    n_targets = int(mask.sum())
+
+                    if n_targets == 0:
+                        st.warning("選択された学年の生徒が見つかりませんでした。")
+                    else:
+                        students_df_all.loc[mask, "grade"] = students_df_all.loc[mask, "grade"].apply(
+                            promote_grade_value
+                        )
+
+                        write_sheet_df("students", students_df_all)
+
+                        try:
+                            load_sheet_df.clear()
+                        except Exception:
+                            pass
+
+                        st.success(f"{n_targets} 名の生徒の学年を進級させました。")
+                        time.sleep(0.5)
+                        st.rerun()
+
+    # ----------------------
     # 生徒削除（masterのみ）
+    # ----------------------
     if current_role == "master" and not students_df.empty:
         st.markdown("---")
         st.subheader("生徒削除（master専用）")
 
-        with st.expander("生徒の削除（紐づく成績・日報も削除されます）"):
+        with st.expander("生徒の削除（紐づく成績・日報・英検も削除されます）"):
             delete_labels = [
                 f'{row["student_id"]} : {row["name"]}' for _, row in students_df.iterrows()
             ]
@@ -879,7 +945,6 @@ def page_student_management(current_role: str):
                 elif not admin_password:
                     st.error("管理者パスワードを入力してください。")
                 else:
-                    # パスワード検証：users シートから master のハッシュを取得
                     users_df = load_sheet_df("users")
                     master_row = users_df[users_df["username"] == "master"]
                     if master_row.empty:
@@ -898,19 +963,19 @@ def page_student_management(current_role: str):
                             # exam_results
                             exam_df = get_exam_results_df()
                             if not exam_df.empty:
-                                exam_df = exam_df[~exam_df["student_id"].isin(delete_ids)]
+                                exam_df = exam_df[~exam_df["student_id"].astype(str).isin(delete_ids)]
                                 write_sheet_df("exam_results", exam_df)
 
                             # coaching_reports
                             coach_df = get_coaching_df()
                             if not coach_df.empty:
-                                coach_df = coach_df[~coach_df["student_id"].isin(delete_ids)]
+                                coach_df = coach_df[~coach_df["student_id"].astype(str).isin(delete_ids)]
                                 write_sheet_df("coaching_reports", coach_df)
 
                             # eiken_records
                             eiken_df = get_eiken_df()
                             if not eiken_df.empty:
-                                eiken_df = eiken_df[~eiken_df["student_id"].isin(delete_ids)]
+                                eiken_df = eiken_df[~eiken_df["student_id"].astype(str).isin(delete_ids)]
                                 write_sheet_df("eiken_records", eiken_df)
 
                             st.success("選択した生徒と紐づくデータを削除しました。")
