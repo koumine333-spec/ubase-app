@@ -338,27 +338,73 @@ def get_current_user_role(roles_dict, username: str) -> str:
 # 生徒ID生成ロジック
 # =================
 
-def generate_new_student_id(students_df: pd.DataFrame) -> int:
-    today = date.today()
-    yy = today.year % 100
-    prefix = f"{yy:02d}"
-    # 当該年度のIDを抽出
-    candidates = []
-    for sid in students_df["student_id"].dropna():
-        s = str(sid)
-        if s.startswith(prefix) and len(s) >= 6:
+# ====================
+# 生徒ID採番ユーティリティ
+# ====================
+
+def generate_new_student_id(students_df: pd.DataFrame | None = None) -> int:
+    """
+    一度使われた student_id を二度と再利用しないようにするため、
+    students / exam_results / coaching_reports / eiken_records
+    の全ての student_id を見て最大値+1 を返す。
+    """
+
+    all_ids: list[int] = []
+
+    # 1) students（関数からも呼ばれるので引数があれば優先）
+    if students_df is None:
+        students_df = get_students_df()
+    if students_df is not None and not students_df.empty and "student_id" in students_df.columns:
+        for v in students_df["student_id"].astype(str):
+            v = v.strip()
+            if not v:
+                continue
             try:
-                candidates.append(int(s))
-            except ValueError:
+                all_ids.append(int(v))
+            except Exception:
                 pass
-    if not candidates:
-        new_num = 1
-    else:
-        max_id = max(candidates)
-        seq = int(str(max_id)[2:]) + 1
-        new_num = seq
-    new_id = int(f"{prefix}{new_num:04d}")
-    return new_id
+
+    # 2) exam_results
+    exam_df = get_exam_results_df()
+    if exam_df is not None and not exam_df.empty and "student_id" in exam_df.columns:
+        for v in exam_df["student_id"].astype(str):
+            v = v.strip()
+            if not v:
+                continue
+            try:
+                all_ids.append(int(v))
+            except Exception:
+                pass
+
+    # 3) coaching_reports
+    coaching_df = get_coaching_df()
+    if coaching_df is not None and not coaching_df.empty and "student_id" in coaching_df.columns:
+        for v in coaching_df["student_id"].astype(str):
+            v = v.strip()
+            if not v:
+                continue
+            try:
+                all_ids.append(int(v))
+            except Exception:
+                pass
+
+    # 4) eiken_records
+    eiken_df = get_eiken_df()
+    if eiken_df is not None and not eiken_df.empty and "student_id" in eiken_df.columns:
+        for v in eiken_df["student_id"].astype(str):
+            v = v.strip()
+            if not v:
+                continue
+            try:
+                all_ids.append(int(v))
+            except Exception:
+                pass
+
+    # 何もなければ初期値からスタート（好きな番号でOK）
+    if not all_ids:
+        return 250001  # 例：最初のID
+
+    return max(all_ids) + 1
 
 
 # =========================
@@ -440,6 +486,31 @@ EIKEN_TOTALS = {
 
 
 DAYS_JP = ["月", "火", "水", "木", "金", "土", "日"]
+
+# ★ ここに追加する ↓↓↓
+
+# 学年の候補
+GRADE_CHOICES = [
+    "小1", "小2", "小3", "小4", "小5", "小6",
+    "中1", "中2", "中3",
+    "高1", "高2", "高3",
+    "既卒",
+]
+
+# 進級マップ（必要なら中3→高1を中3→高3などに変えてOK）
+PROMOTION_MAP = {
+    "小1": "小2",
+    "小2": "小3",
+    "小3": "小4",
+    "小4": "小5",
+    "小5": "小6",
+    "小6": "中1",
+    "中1": "中2",
+    "中2": "中3",
+    "中3": "高1",
+    "高1": "高2",
+    "高2": "高3",
+}
 
 
 # ==========
@@ -565,7 +636,12 @@ def page_student_management(current_role: str):
         school_name = st.text_input("学校名")
         target_school = st.text_input("志望校")
 
-    admission_goal = st.text_area("入塾時の目標", height=80)
+    admission_goal = st.text_area(
+        "入塾時の目標",
+        height=80,
+        key="new_admission_goal",  
+    )
+
     student_login_id = st.text_input("生徒ID（生徒用ログインID・任意）")
 
     # 科目
@@ -654,129 +730,136 @@ def page_student_management(current_role: str):
 
         st.dataframe(df_disp, use_container_width=True)
 
-    # 生徒一覧・編集
-    st.subheader("生徒情報の一覧・編集")
+        # ----------------------
+    # 登録済み生徒の一覧表示
+    # ----------------------
+    st.markdown("---")
+    st.subheader("登録済み生徒一覧")
 
-    students_df = load_sheet_df("students")
-
+    students_df = get_students_df()
     if students_df.empty:
-        st.info("登録されている生徒がいません。")
-    else:
-        # 一覧表示
-        # 表示用に必要な列だけ抜き出し
-        students_df_display = students_df[
-            ["student_id", "name", "grade", "school_name", "target_school", "admission_goal", "student_login_id"]
-        ].copy()
+        st.info("生徒が登録されていません。")
+        return
 
-        # カラム名を日本語に変更
-        students_df_display = students_df_display.rename(
-            columns={
-                "student_id": "生徒ID",
-                "name": "生徒名",
-                "grade": "区分（中学生/高校生）",
-                "school_name": "学校名",
-                "target_school": "志望校",
-                "admission_goal": "入塾目標",
-                "student_login_id": "生徒用ログインID",
-            }
-        )
+    # 表示用に最低限の列だけ並べる
+    display_df = students_df[["student_id", "name", "grade", "school_name", "target_school"]]
+    display_df = display_df.rename(
+        columns={
+            "student_id": "生徒ID",
+            "name": "氏名",
+            "grade": "学年",
+            "school_name": "在籍校",
+            "target_school": "志望校",
+        }
+    )
+    st.dataframe(display_df, use_container_width=True)
 
-        st.dataframe(students_df_display, use_container_width=True)
+    # ----------------------
+    # 既存生徒の情報編集（学年・目標など）
+    # ----------------------
+    st.markdown("---")
+    st.subheader("生徒情報の編集（同じIDで学年・目標を更新）")
 
-        # ID を文字列に統一
+    # student_id を文字列にそろえる
+    if "student_id" in students_df.columns:
         students_df["student_id"] = students_df["student_id"].astype(str)
 
-        st.markdown("##### 生徒情報の編集")
+    edit_options = [
+        f'{row["student_id"]} : {row["name"]}'
+        for _, row in students_df.iterrows()
+    ]
 
-    	# 生徒選択（IDと名前を表示）
-        selected_id = st.selectbox(
-            "編集する生徒を選択",
-            students_df["student_id"].tolist(),
-            format_func=lambda sid: f"{sid} ： "
-            + students_df.loc[students_df["student_id"] == sid, "name"].values[0],
-            key="edit_student_select",
+    selected_label = st.selectbox(
+        "編集する生徒を選択",
+        edit_options,
+        key="edit_student_select",
+    )
+    selected_id = selected_label.split(" : ")[0]
+    target_row = students_df[students_df["student_id"] == selected_id].iloc[0]
+
+    col1, col2 = st.columns(2)
+
+    # ---- 左側：基本情報 ----
+    with col1:
+        edit_name = st.text_input(
+            "氏名",
+            value=target_row.get("name", ""),
+            key="edit_name",
         )
 
-        # 選択されたIDでフィルタ
-        filtered = students_df[students_df["student_id"] == str(selected_id)]
-
-        # 一致する行がない場合は安全に抜ける
-        if filtered.empty:
-            st.warning("選択された生徒データが見つかりません。画面を再読み込みしてから再度お試しください。")
-            st.stop()
-
-        # ここで初めて 0 行目を取る
-        target_row = filtered.iloc[0]
-
-
-        st.markdown("##### 生徒情報の編集")
-
-        col1, col2 = st.columns(2)
-        with col1:
-            edit_name = st.text_input("生徒名", value=target_row["name"], key="edit_name")
-            edit_grade = st.selectbox(
-                "学年",
-                ["中学生", "高校生"],
-                index=0 if target_row["grade"] == "中学生" else 1,
-                key=f"edit_grade_{selected_id}",  # ★ これを追加
-            )
-        with col2:
-            edit_school_name = st.text_input("学校名", value=target_row.get("school_name", ""))
-            edit_target_school = st.text_input("志望校", value=target_row.get("target_school", ""))
-
-        edit_admission_goal = st.text_area(
-            "入塾時の目標",
-            value=target_row.get("admission_goal", ""),
-            height=80,
-        )
-        edit_student_login_id = st.text_input(
-            "生徒ID（生徒用ログインID）",
-            value=target_row.get("student_login_id", ""),
-        )
-
-        # 科目編集
-        if edit_grade == "中学生":
-            edit_subjects = JUNIOR_SUBJECTS
-            st.write("中学生は以下の5科目固定：", "、".join(edit_subjects))
-            edit_mock_subjects = []
+        # 学年：選択式
+        current_grade = target_row.get("grade", "")
+        if current_grade in GRADE_CHOICES:
+            grade_index = GRADE_CHOICES.index(current_grade)
         else:
-            try:
-                existing_subjects = json.loads(target_row.get("subjects") or "[]")
-            except Exception:
-                existing_subjects = []
-            try:
-                existing_mock_subjects = json.loads(target_row.get("mock_subjects") or "[]")
-            except Exception:
-                existing_mock_subjects = []
+            grade_index = 0
 
-            st.write("定期テスト科目（高校）")
-            edit_subjects = st.multiselect(
-                "定期テスト科目",
-                HIGH_REGULAR_SUBJECTS,
-                default=[s for s in existing_subjects if s in HIGH_REGULAR_SUBJECTS],
-            )
-            st.write("模試受験科目（共通テスト系）")
-            edit_mock_subjects = st.multiselect(
-                "模試受験科目",
-                HIGH_MOCK_SUBJECTS,
-                default=[s for s in existing_mock_subjects if s in HIGH_MOCK_SUBJECTS],
-            )
+        edit_grade = st.selectbox(
+            "学年",
+            GRADE_CHOICES,
+            index=grade_index,
+            key="edit_grade",
+        )
 
-        if st.button("生徒情報を更新", key="update_student"):
-            idx = students_df[students_df["student_id"] == selected_id].index[0]
-            students_df.at[idx, "name"] = edit_name
-            students_df.at[idx, "grade"] = edit_grade
-            students_df.at[idx, "school_name"] = edit_school_name
-            students_df.at[idx, "target_school"] = edit_target_school
-            students_df.at[idx, "admission_goal"] = edit_admission_goal
-            students_df.at[idx, "student_login_id"] = edit_student_login_id
-            students_df.at[idx, "subjects"] = json.dumps(edit_subjects, ensure_ascii=False)
-            students_df.at[idx, "mock_subjects"] = json.dumps(edit_mock_subjects, ensure_ascii=False)
+        edit_school_name = st.text_input(
+            "在籍校",
+            value=target_row.get("school_name", ""),
+            key="edit_school_name",
+        )
 
-            write_sheet_df("students", students_df)
-            st.success("生徒情報を更新しました。")
-            time.sleep(1)
-            st.rerun()
+    # ---- 右側：目標など ----
+    with col2:
+        edit_target_school = st.text_input(
+            "志望校",
+            value=target_row.get("target_school", ""),
+            key="edit_target_school",
+        )
+
+        edit_student_login_id = st.text_input(
+            "生徒ログインID（任意）",
+            value=target_row.get("student_login_id", ""),
+            key="edit_student_login_id",
+        )
+
+    # 入塾時の目標（text_area は新規登録と key を分ける）
+    edit_admission_goal = st.text_area(
+        "入塾時の目標",
+        value=target_row.get("admission_goal", ""),
+        height=80,
+        key="edit_admission_goal",
+    )
+
+    # ---------------- 進級ボタン（必要なら使う） ----------------
+    st.markdown("#### 学年の自動進級（オプション）")
+
+    next_grade = PROMOTION_MAP.get(current_grade, "")
+    if next_grade:
+        st.write(f"現在の学年: **{current_grade}** → 次の学年候補: **{next_grade}**")
+        if st.button("この生徒を進級させる（学年だけ自動更新）", key="promote_single_student"):
+            edit_grade = next_grade
+            st.info(f"画面上の学年を「{next_grade}」に変更しました。このあと『生徒情報を更新』を押して保存してください。")
+    else:
+        st.write(f"現在の学年: **{current_grade}**（進級マップ未設定のため、自動進級はありません）")
+
+    # ---------------- 保存処理 ----------------
+    if st.button("生徒情報を更新", key="update_student"):
+        idx = students_df[students_df["student_id"] == selected_id].index[0]
+
+        # ★ 同じ student_id のまま、学年・目標だけを上書き
+        students_df.at[idx, "name"] = edit_name
+        students_df.at[idx, "grade"] = edit_grade
+        students_df.at[idx, "school_name"] = edit_school_name
+        students_df.at[idx, "target_school"] = edit_target_school
+        students_df.at[idx, "admission_goal"] = edit_admission_goal
+        students_df.at[idx, "student_login_id"] = edit_student_login_id
+
+        # subjects / mock_subjects はそのまま触らない（必要なら別UIで編集）
+        write_sheet_df("students", students_df)
+
+        st.success("生徒情報を更新しました。（ID はそのまま、学年・目標のみ変更）")
+        time.sleep(0.5)
+        st.rerun()
+
 
     # 生徒削除（masterのみ）
     if current_role == "master" and not students_df.empty:
