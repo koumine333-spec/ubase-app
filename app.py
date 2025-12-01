@@ -2472,21 +2472,17 @@ def page_teacher_management(current_username: str, current_role: str):
 
 def main():
     # ページ設定（最初の Streamlit 呼び出し）
-    st.set_page_config(
-        page_title="U-BASE オンライン指導のウルクス生徒 管理システム",  # ブラウザのタブに出るタイトル
-        page_icon="ulucusicon.png",                         # タブのアイコン
-        layout="wide"
-    )
-
+    st.set_page_config(page_title="U-BASE", layout="wide")
 
     # 共通CSS
     inject_base_css()
 
-    # Google Sheets のシート準備（ワークシートが無ければ作成）
-    init_sheets()
-
-    # マスターアカウントが無ければ作成
-    ensure_master_user()
+    # ★ Google Sheets 初期化 & master ユーザー作成は
+    #   セッションごとに「最初の1回だけ」実行する
+    if "ubase_initialized" not in st.session_state:
+        init_sheets()        # シート有無チェック & 作成
+        ensure_master_user() # master ユーザーが無ければ作成
+        st.session_state["ubase_initialized"] = True
 
     # 認証オブジェクト作成
     authenticator, roles_dict = build_authenticator()
@@ -2496,7 +2492,7 @@ def main():
     st.markdown('<div class="ubase-title">U-BASE</div>', unsafe_allow_html=True)
     st.markdown('<div class="ubase-subtitle">Education Management System</div>', unsafe_allow_html=True)
 
-    # login の UI 表示（戻り値は使わず、session_state から取得）
+    # ★ login の戻り値は使わず、session_state から取得する
     authenticator.login(
         "main",  # location
         fields={
@@ -2507,7 +2503,6 @@ def main():
         },
     )
 
-    # 認証状態とユーザー情報を session_state から取得
     auth_status = st.session_state.get("authentication_status", None)
     username = st.session_state.get("username", "")
     name = st.session_state.get("name", "")
@@ -2521,8 +2516,6 @@ def main():
 
     # ===== ここから先はログイン成功後 =====
     current_role = get_current_user_role(roles_dict, username)
-    # 役割もセッションに保持しておく（成績登録・日報登録などで利用可能）
-    st.session_state["role"] = current_role
 
     # サイドバー
     st.sidebar.title("U-BASE メニュー")
