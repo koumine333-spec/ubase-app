@@ -524,66 +524,153 @@ def promote_grade_value(grade: str) -> str:
 def inject_base_css():
     css = """
     <style>
-    /* 全体のフォント・背景 */
+    /* 全体 */
     body {
-        background-color: #ffffff;
+        background-color: #f5f7fb;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
-    /* タイトルカラー */
+
+    .stApp {
+        background: radial-gradient(circle at top left, #ffffff 0, #f5f7fb 40%, #eef2f8 100%);
+    }
+
+    /* タイトル */
     .ubase-title {
         text-align: center;
-        color: #0055aa;
-        font-size: 2.2rem;
+        color: #2563eb;
+        font-size: 2.1rem;
         font-weight: 800;
-        margin-bottom: 0.2rem;
+        letter-spacing: 0.08em;
+        margin-bottom: 0.1rem;
     }
     .ubase-subtitle {
         text-align: center;
-        color: #666666;
+        color: #6b7280;
         font-size: 0.9rem;
-        margin-bottom: 1.0rem;
+        margin-bottom: 1.2rem;
     }
-    /* メインボタン */
+
+    /* サイドバー */
+    section[data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #ffffff 0%, #f3f4ff 100%);
+        box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+        border-right: 1px solid #e5e7eb;
+    }
+    section[data-testid="stSidebar"] .css-1d391kg,
+    section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
+        padding-top: 1.5rem;
+    }
+
+    section[data-testid="stSidebar"] h1,
+    section[data-testid="stSidebar"] h2,
+    section[data-testid="stSidebar"] h3 {
+        color: #111827;
+    }
+    section[data-testid="stSidebar"] p {
+        color: #4b5563;
+    }
+
+    /* メニューのラジオボタン */
+    div[role="radiogroup"] > label {
+        padding: 0.35rem 0.4rem;
+        border-radius: 9999px;
+        transition: background-color 0.15s ease, color 0.15s ease;
+    }
+    div[role="radiogroup"] > label:hover {
+        background-color: rgba(37, 99, 235, 0.08);
+    }
+    div[role="radiogroup"] > label span {
+        font-size: 0.92rem;
+    }
+
+    /* 共通ボタン（メインエリア用） */
     .stButton>button {
-        background-color: #0055aa !important;
-        color: white !important;
-        border-radius: 4px !important;
+        background: linear-gradient(135deg, #2563eb, #3b82f6) !important;
+        color: #ffffff !important;
+        border-radius: 9999px !important;
         border: none !important;
+        padding: 0.5rem 1.4rem !important;
+        font-weight: 600 !important;
+        box-shadow: 0 10px 20px rgba(37, 99, 235, 0.25);
+        transition: transform 0.08s ease, box-shadow 0.08s ease, background 0.2s ease;
     }
     .stButton>button:hover {
-        background-color: #003f7d !important;
+        background: linear-gradient(135deg, #1d4ed8, #2563eb) !important;
+        transform: translateY(-1px);
+        box-shadow: 0 14px 28px rgba(37, 99, 235, 0.35);
     }
-    /* 危険操作ボタン（赤）用クラス */
+
+    /* ★ サイドバーのボタン（＝ログアウト）だけ淡いスタイルで上書き */
+    section[data-testid="stSidebar"] .stButton>button {
+        background: #ffffff !important;
+        color: #2563eb !important;
+        border-radius: 9999px !important;
+        border: 1px solid #bfdbfe !important;
+        box-shadow: 0 4px 10px rgba(37, 99, 235, 0.16);
+        padding: 0.4rem 1.3rem !important;
+        font-weight: 600 !important;
+    }
+    section[data-testid="stSidebar"] .stButton>button:hover {
+        background: #eff6ff !important;
+        box-shadow: 0 6px 14px rgba(37, 99, 235, 0.22);
+    }
+
+    /* 危険操作ボタン（削除など） */
     .danger-button>button {
-        background-color: #cc0000 !important;
-        color: white !important;
+        background: linear-gradient(135deg, #ef4444, #f97373) !important;
+        color: #ffffff !important;
+        border-radius: 9999px !important;
+        border: none !important;
+        font-weight: 600 !important;
+        box-shadow: 0 8px 18px rgba(248, 113, 113, 0.4);
     }
     .danger-button>button:hover {
-        background-color: #a00000 !important;
+        background: linear-gradient(135deg, #dc2626, #ef4444) !important;
     }
-    /* レポート枠 */
+
+    /* レポート系カード */
     .report-container {
-        border: 2px solid #0055aa;
+        border: 1px solid #e5e7eb;
         padding: 1.5rem;
-        border-radius: 8px;
+        border-radius: 14px;
         background-color: #ffffff;
+        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
     }
     .report-header {
         text-align: center;
         font-weight: 700;
-        font-size: 1.2rem;
-        margin-bottom: 0.5rem;
+        font-size: 1.15rem;
+        margin-bottom: 0.75rem;
+        color: #111827;
     }
     .report-section-title {
         font-weight: 700;
-        color: #0055aa;
+        color: #2563eb;
         margin-top: 1.0rem;
         margin-bottom: 0.4rem;
-        border-left: 4px solid #0055aa;
-        padding-left: 0.4rem;
+        border-left: 4px solid #2563eb;
+        padding-left: 0.5rem;
+        font-size: 0.98rem;
+    }
+
+    /* テーブル */
+    .stDataFrame, .stTable {
+        border-radius: 12px;
+        border: 1px solid #e5e7eb;
+        overflow: hidden;
+        box-shadow: 0 4px 16px rgba(15, 23, 42, 0.06);
+        background-color: #ffffff;
+    }
+
+    /* フォームラベル */
+    label {
+        font-size: 0.9rem;
+        color: #374151;
     }
     </style>
     """
     st.markdown(css, unsafe_allow_html=True)
+
 
 
 def inject_print_mode_css():
