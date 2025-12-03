@@ -279,29 +279,36 @@ def ensure_master_user():
     role: master
     """
     df = load_sheet_df("users")
+
+    MASTER_USERNAME = "master"
+    MASTER_NAME = "管理者"
+    MASTER_PASSWORD = "Ubase2025"
+
+    # 空 or username 列が無い場合 → master だけ作って初期化
     if "username" not in df.columns or df.empty:
-        # 空なら master だけ作成
-        hashed = stauth.Hasher.hash(new_password)
+        hashed = stauth.Hasher.hash(MASTER_PASSWORD)
         df = pd.DataFrame(
             [{
-                "username": "master",
-                "name": "管理者",
+                "username": MASTER_USERNAME,
+                "name": MASTER_NAME,
                 "password_hash": hashed,
                 "role": "master",
             }]
         )
         write_sheet_df("users", df)
-    else:
-        if not (df["username"] == "master").any():
-            hashed = stauth.Hasher(["Ubase2025"]).generate()[0]
-            new_row = {
-                "username": "master",
-                "name": "管理者",
-                "password_hash": hashed,
-                "role": "master",
-            }
-            df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-            write_sheet_df("users", df)
+        return
+
+    # 既に users シートがあって、master がいない場合だけ追加
+    if not (df["username"] == MASTER_USERNAME).any():
+        hashed = stauth.Hasher.hash(MASTER_PASSWORD)
+        new_row = {
+            "username": MASTER_USERNAME,
+            "name": MASTER_NAME,
+            "password_hash": hashed,
+            "role": "master",
+        }
+        df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+        write_sheet_df("users", df)
 
 
 def build_authenticator():
@@ -1295,6 +1302,142 @@ def page_grade_tracker():
     fig_subj.update_layout(xaxis_title="テスト", yaxis_title="得点", legend_title="科目")
     st.plotly_chart(fig_subj, use_container_width=True)
 
+    # ----------------- 成績編集 -----------------
+    st.markdown("---")
+    st.subheader("登録済み成績の編集")
+
+    if "id" not in exam_df.columns:
+        st.info("編集可能な成績データがありません。")
+    else:
+        exam_df["id"] = exam_df["id"].astype(str)
+        edit_options = [
+            f'{row["id"]} : {row.get("date","")} {row.get("exam_category","")} {row.get("exam_name","")}'
+            for _, row in exam_df.iterrows()
+        ]
+
+        if not edit_options:
+            st.info("編集可能な成績データがありません。")
+        else:
+            selected_edit = st.selectbox(
+                "編集するテストを選択",
+                [""] + edit_options,
+                key=f"grade_edit_exam_select_{student_id}",
+            )
+
+            if selected_edit:
+                edit_id = selected_edit.split(" : ")[0]
+                target_row = exam_df[exam_df["id"] == edit_id].iloc[0]
+
+                st.markdown("#### 成績内容を編集")
+
+                # 区分
+                current_cat = target_row.get("exam_category", "定期テスト")
+                edit_exam_category = st.radio(
+                    "テスト区分（編集）",
+                    ["定期テスト", "模試"],
+                    index=0 if current_cat == "定期テスト" else 1,
+                    horizontal=True,
+                    key=f"edit_exam_category_{edit_id}",
+                )
+
+                # テスト名
+                if edit_exam_category == "定期テスト":
+                    current_name = target_row.get("exam_name", "")
+                    if current_name in REGULAR_EXAM_NAMES:
+                        idx = REGULAR_EXAM_NAMES.index(current_name)
+                    else:
+                        idx = 0
+                    edit_exam_name = st.selectbox(
+                        "定期テスト名（編集）",
+                        REGULAR_EXAM_NAMES,
+                        index=idx,
+                        key=f"edit_exam_name_{edit_id}",
+                    )
+                else:
+                    edit_exam_name = st.text_input(
+                        "模試名（編集）",
+                        value=target_row.get("exam_name", ""),
+                        key=f"edit_exam_name_{edit_id}",
+                    )
+
+                # 実施日
+                try:
+                    edit_exam_date_val = datetime.fromisoformat(
+                        target_row.get("date", "")
+                    ).date()
+                except Exception:
+                    edit_exam_date_val = date.today()
+                edit_exam_date = st.date_input(
+                    "実施日（編集）",
+                    value=edit_exam_date_val,
+                    key=f"edit_exam_date_{edit_id}",
+                )
+
+                # 科目別の点数
+                try:
+                    res = json.loads(target_row.get("results_json") or "{}")
+                except Exception:
+                    res = {}
+
+                edit_results = {}
+                st.markdown("##### 科目別の目標点・結果点（編集）")
+                for subj, vals in res.items():
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        t_val = int(vals.get("target", 0) or 0)
+                        target_edit = st.number_input(
+                            f"{subj} の目標点（編集）",
+                            min_value=0,
+                            max_value=1000,
+                            value=t_val,
+                            key=f"edit_grade_target_{edit_id}_{subj}",
+                        )
+                    with col2:
+                        s_val = int(vals.get("score", 0) or 0)
+                        score_edit = st.number_input(
+                            f"{subj} の結果点（編集）",
+                            min_value=0,
+                            max_value=1000,
+                            value=s_val,
+                            key=f"edit_grade_score_{edit_id}_{subj}",
+                        )
+                    edit_results[subj] = {"target": target_edit, "score": score_edit}
+
+                if st.button("この成績を更新", key=f"btn_update_exam_{edit_id}"):
+                    exam_all = get_exam_results_df()
+                    if exam_all.empty or "id" not in exam_all.columns:
+                        st.error("成績データが見つかりませんでした。")
+                    else:
+                        exam_all["id"] = exam_all["id"].astype(str)
+                        mask = exam_all["id"] == edit_id
+                        if not mask.any():
+                            st.error("対象の成績データが見つかりませんでした。")
+                        else:
+                            idx = exam_all[mask].index[0]
+                            exam_all.at[idx, "exam_category"] = edit_exam_category
+                            exam_all.at[idx, "exam_name"] = edit_exam_name
+                            exam_all.at[idx, "date"] = edit_exam_date.isoformat()
+                            exam_all.at[idx, "results_json"] = json.dumps(
+                                edit_results, ensure_ascii=False
+                            )
+                            # 更新者を現在ログイン中の講師で上書き
+                            exam_all.at[idx, "teacher_username"] = teacher_username
+                            exam_all.at[idx, "teacher_name"] = teacher_name
+
+                            write_sheet_df("exam_results", exam_all)
+                            try:
+                                load_sheet_df.clear()
+                            except Exception:
+                                pass
+                            try:
+                                load_all_tables.clear()
+                            except Exception:
+                                pass
+
+                            st.success("成績データを更新しました。")
+                            time.sleep(1)
+                            st.rerun()
+
     # ----------------- 成績一覧表（テストごと横向き） -----------------
     st.markdown("##### 成績一覧（テストごとの得点）")
 
@@ -1399,7 +1542,7 @@ def page_coaching():
     student_id = student_label.split(" : ")[0]
     student_name = student_label.split(" : ")[1]
 
-    # 日付
+    # 日付（新規入力用）
     today = date.today()
     report_date = st.date_input("日付", value=today)
     date_str = report_date.isoformat()
@@ -1443,7 +1586,7 @@ def page_coaching():
             st.write("登録なし")
 
     st.markdown("---")
-    st.subheader("今回の授業日報入力")
+    st.subheader("今回の授業日報入力（新規・同日上書き）")
 
     col1, col2 = st.columns(2)
 
@@ -1481,7 +1624,7 @@ def page_coaching():
     target3 = st.text_input("目標3")
     targets_list = [target1, target2, target3]
 
-    # ------------- 保存処理 -------------
+    # ------------- 保存処理（新規 or 同日上書き）-------------
     if st.button("日報を保存", key="save_coaching"):
         student_eval = {
             "理解度": stu_understanding,
@@ -1603,7 +1746,231 @@ def page_coaching():
         time.sleep(0.5)
         st.rerun()
 
-    # ------------- 過去の日報履歴 -------------
+    # ------------- 編集機能（既存日報の編集）-------------
+    st.markdown("---")
+    st.subheader("登録済み日報の編集")
+
+    coaching_df = get_coaching_df()
+    if not coaching_df.empty and "student_id" in coaching_df.columns:
+        coaching_df["student_id"] = coaching_df["student_id"].astype(str)
+        coaching_df_student = coaching_df[coaching_df["student_id"] == str(student_id)].sort_values(
+            "date", ascending=False
+        )
+        if "id" in coaching_df_student.columns:
+            coaching_df_student = coaching_df_student.copy()
+            coaching_df_student["id"] = coaching_df_student["id"].astype(str)
+    else:
+        coaching_df_student = pd.DataFrame()
+
+    if coaching_df_student.empty or "id" not in coaching_df_student.columns:
+        st.info("編集可能な日報データがありません。")
+    else:
+        edit_options = [
+            f'{row["id"]} : {row["date"]}' for _, row in coaching_df_student.iterrows()
+        ]
+        selected_edit = st.selectbox(
+            "編集する日報を選択",
+            [""] + edit_options,
+            key=f"edit_coaching_select_{student_id}",
+        )
+
+        if selected_edit:
+            edit_id = selected_edit.split(" : ")[0]
+            target_row = coaching_df_student[coaching_df_student["id"] == edit_id].iloc[0]
+
+            st.markdown("### 日報内容を編集")
+
+            # 日付（編集）
+            try:
+                edit_date_val = datetime.fromisoformat(target_row.get("date", "")).date()
+            except Exception:
+                edit_date_val = date.today()
+            edit_report_date = st.date_input(
+                "日付（編集）",
+                value=edit_date_val,
+                key=f"edit_report_date_{edit_id}",
+            )
+
+            # JSON → 辞書
+            try:
+                se = json.loads(target_row.get("student_eval_json") or "{}")
+            except Exception:
+                se = {}
+            try:
+                te = json.loads(target_row.get("teacher_eval_json") or "{}")
+            except Exception:
+                te = {}
+            try:
+                schedule_old = json.loads(target_row.get("study_schedule_json") or "{}")
+            except Exception:
+                schedule_old = {}
+            try:
+                targets_old = json.loads(target_row.get("study_targets_json") or "[]")
+            except Exception:
+                targets_old = []
+
+            # 安全に int 変換
+            def _to_int(v, default=3):
+                try:
+                    return int(v)
+                except Exception:
+                    return default
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**生徒自己評価 (1〜5)（編集）**")
+                edit_stu_understanding = st.slider(
+                    "授業理解度（編集）",
+                    1, 5,
+                    _to_int(se.get("理解度", 3)),
+                    key=f"edit_stu_understanding_{edit_id}",
+                )
+                edit_stu_goal = st.slider(
+                    "目標達成度（編集）",
+                    1, 5,
+                    _to_int(se.get("目標達成度", 3)),
+                    key=f"edit_stu_goal_{edit_id}",
+                )
+                edit_stu_motivation = st.slider(
+                    "モチベーション（編集）",
+                    1, 5,
+                    _to_int(se.get("モチベーション", 3)),
+                    key=f"edit_stu_motivation_{edit_id}",
+                )
+
+            with col2:
+                st.markdown("**講師評価 (1〜5)（編集）**")
+                edit_tch_attitude = st.slider(
+                    "授業態度（編集）",
+                    1, 5,
+                    _to_int(te.get("授業態度", 3)),
+                    key=f"edit_tch_attitude_{edit_id}",
+                )
+                edit_tch_homework = st.slider(
+                    "宿題完成度（編集）",
+                    1, 5,
+                    _to_int(te.get("宿題完成度", 3)),
+                    key=f"edit_tch_homework_{edit_id}",
+                )
+                edit_tch_prev_understand = st.slider(
+                    "前回理解度（編集）",
+                    1, 5,
+                    _to_int(te.get("前回理解度", 3)),
+                    key=f"edit_tch_prev_understand_{edit_id}",
+                )
+
+            edit_teacher_comment = st.text_area(
+                "講師コメント（編集）",
+                value=te.get("コメント", ""),
+                height=80,
+                key=f"edit_teacher_comment_{edit_id}",
+            )
+
+            st.markdown("#### 次回までの自習予定（編集）")
+            # もともと時間が入っていた曜日を初期選択
+            default_days = [d for d in DAYS_JP if d in (schedule_old or {})]
+            edit_selected_days = st.multiselect(
+                "勉強する曜日を選択（編集）",
+                DAYS_JP,
+                default=default_days,
+                key=f"edit_days_{edit_id}",
+            )
+            edit_schedule_dict = {}
+            for d in edit_selected_days:
+                default_hr = 1.0
+                if schedule_old and d in schedule_old:
+                    try:
+                        default_hr = float(schedule_old[d])
+                    except Exception:
+                        default_hr = 1.0
+                hrs = st.number_input(
+                    f"{d}曜日の目標勉強時間（時間）（編集）",
+                    min_value=0.0,
+                    max_value=24.0,
+                    value=default_hr,
+                    step=0.5,
+                    key=f"edit_hrs_{edit_id}_{d}",
+                )
+                edit_schedule_dict[d] = hrs
+
+            st.markdown("#### 次回までの自習目標（編集）")
+            t1_old = targets_old[0] if len(targets_old) > 0 else ""
+            t2_old = targets_old[1] if len(targets_old) > 1 else ""
+            t3_old = targets_old[2] if len(targets_old) > 2 else ""
+
+            edit_target1 = st.text_input(
+                "目標1（編集）",
+                value=t1_old,
+                key=f"edit_target1_{edit_id}",
+            )
+            edit_target2 = st.text_input(
+                "目標2（編集）",
+                value=t2_old,
+                key=f"edit_target2_{edit_id}",
+            )
+            edit_target3 = st.text_input(
+                "目標3（編集）",
+                value=t3_old,
+                key=f"edit_target3_{edit_id}",
+            )
+            edit_targets_list = [edit_target1, edit_target2, edit_target3]
+
+            if st.button("この日報を更新", key=f"btn_update_coaching_{edit_id}"):
+                # 更新用の dict
+                new_student_eval = {
+                    "理解度": edit_stu_understanding,
+                    "目標達成度": edit_stu_goal,
+                    "モチベーション": edit_stu_motivation,
+                }
+                new_teacher_eval = {
+                    "授業態度": edit_tch_attitude,
+                    "宿題完成度": edit_tch_homework,
+                    "前回理解度": edit_tch_prev_understand,
+                    "コメント": edit_teacher_comment,
+                }
+
+                coaching_all = get_coaching_df()
+                if coaching_all.empty or "id" not in coaching_all.columns:
+                    st.error("日報データが見つかりませんでした。")
+                else:
+                    coaching_all["id"] = coaching_all["id"].astype(str)
+                    mask_all = coaching_all["id"] == edit_id
+                    if not mask_all.any():
+                        st.error("対象の日報データが見つかりませんでした。")
+                    else:
+                        idx_all = coaching_all[mask_all].index[0]
+                        coaching_all.at[idx_all, "date"] = edit_report_date.isoformat()
+                        coaching_all.at[idx_all, "student_eval_json"] = json.dumps(
+                            new_student_eval, ensure_ascii=False
+                        )
+                        coaching_all.at[idx_all, "teacher_eval_json"] = json.dumps(
+                            new_teacher_eval, ensure_ascii=False
+                        )
+                        coaching_all.at[idx_all, "study_schedule_json"] = json.dumps(
+                            edit_schedule_dict, ensure_ascii=False
+                        )
+                        coaching_all.at[idx_all, "study_targets_json"] = json.dumps(
+                            edit_targets_list, ensure_ascii=False
+                        )
+                        coaching_all.at[idx_all, "updated_at"] = datetime.now().isoformat()
+                        coaching_all.at[idx_all, "teacher_username"] = teacher_username
+                        coaching_all.at[idx_all, "teacher_name"] = teacher_name
+
+                        write_sheet_df("coaching_reports", coaching_all)
+                        try:
+                            load_sheet_df.clear()
+                        except Exception:
+                            pass
+                        try:
+                            load_all_tables.clear()
+                        except Exception:
+                            pass
+
+                        st.success("日報データを更新しました。")
+                        time.sleep(1)
+                        st.rerun()
+
+    # ------------- 過去の日報履歴（閲覧）-------------
     st.markdown("---")
     st.subheader("過去の日報履歴")
 
@@ -1818,7 +2185,7 @@ def page_eiken():
         sp_rate = (sp_correct / sp_total * 100) if sp_total else 0
         st.caption(f"正答率：{sp_rate:.1f} %")
 
-    # ---------------- 保存処理 ----------------
+    # ---------------- 保存処理（新規） ----------------
     if st.button("演習記録を保存", key="save_eiken"):
         eiken_all = get_eiken_df()
 
@@ -1909,6 +2276,9 @@ def page_eiken():
         eiken_df_student = eiken_df[eiken_df["student_id"] == str(student_id)].sort_values(
             "practice_date"
         )
+        if "id" in eiken_df_student.columns:
+            eiken_df_student = eiken_df_student.copy()
+            eiken_df_student["id"] = eiken_df_student["id"].astype(str)
     else:
         eiken_df_student = pd.DataFrame()
 
@@ -1997,6 +2367,191 @@ def page_eiken():
 
         st.markdown("##### 演習記録一覧（4技能）")
         st.dataframe(pd.DataFrame(rows), use_container_width=True)
+
+        # ---------------- 編集機能（英検演習記録の編集） ----------------
+        st.markdown("---")
+        st.subheader("英検演習記録の編集")
+
+        if eiken_df_student.empty or "id" not in eiken_df_student.columns:
+            st.info("編集可能な英検演習データがありません。")
+        else:
+            edit_options = [
+                f'{row["id"]} : {row["practice_date"]} {row.get("category", "")}'
+                for _, row in eiken_df_student.iterrows()
+            ]
+            selected_edit = st.selectbox(
+                "編集する演習記録を選択",
+                [""] + edit_options,
+                key=f"edit_eiken_select_{student_id}",
+            )
+
+            if selected_edit:
+                edit_id = selected_edit.split(" : ")[0]
+                target_row = eiken_df_student[eiken_df_student["id"] == edit_id].iloc[0]
+
+                st.markdown("### 演習記録の内容を編集")
+
+                # 既存値の取得
+                old_grade = target_row.get("target_grade", "")
+                old_exam_date = target_row.get("exam_date", "")
+                old_practice_date = target_row.get("practice_date", "")
+                old_category = target_row.get("category", "")
+
+                # scores_json → dict
+                try:
+                    old_scores = json.loads(target_row.get("scores_json") or "{}")
+                except Exception:
+                    old_scores = {}
+
+                def _get_skill_info(key):
+                    info = old_scores.get(key, {}) or {}
+                    c = info.get("correct", 0)
+                    t = info.get("total", 0)
+                    try:
+                        c = int(c)
+                    except Exception:
+                        c = 0
+                    try:
+                        t = int(t)
+                    except Exception:
+                        t = 0
+                    return c, t
+
+                rd_c_old, rd_t_old = _get_skill_info("reading")
+                ls_c_old, ls_t_old = _get_skill_info("listening")
+                wr_c_old, wr_t_old = _get_skill_info("writing")
+                sp_c_old, sp_t_old = _get_skill_info("speaking")
+
+                # 日付などの編集
+                edit_grade = st.selectbox(
+                    "目標級（編集）",
+                    EIKEN_GRADES,
+                    index=EIKEN_GRADES.index(old_grade) if old_grade in EIKEN_GRADES else 2,
+                    key=f"edit_eiken_grade_{edit_id}",
+                )
+
+                try:
+                    exam_date_val = datetime.fromisoformat(old_exam_date).date()
+                except Exception:
+                    exam_date_val = date.today()
+                edit_exam_date = st.date_input(
+                    "本番受験日（編集）",
+                    value=exam_date_val,
+                    key=f"edit_eiken_exam_date_{edit_id}",
+                )
+
+                try:
+                    practice_date_val = datetime.fromisoformat(old_practice_date).date()
+                except Exception:
+                    # practice_date が date-only 文字列の場合も想定
+                    try:
+                        practice_date_val = datetime.strptime(str(old_practice_date), "%Y-%m-%d").date()
+                    except Exception:
+                        practice_date_val = date.today()
+                edit_practice_date = st.date_input(
+                    "演習日（編集）",
+                    value=practice_date_val,
+                    key=f"edit_eiken_practice_date_{edit_id}",
+                )
+
+                edit_category = st.text_input(
+                    "実施内容（編集）",
+                    value=old_category,
+                    key=f"edit_eiken_category_{edit_id}",
+                )
+
+                st.markdown("#### 技能別の結果編集")
+
+                col1_e, col2_e = st.columns(2)
+                with col1_e:
+                    st.write(f"**Reading（全 {rd_t_old} 問中）**" if rd_t_old else "**Reading**")
+                    edit_rd_correct = st.number_input(
+                        "Reading 正解数（編集）",
+                        min_value=0,
+                        max_value=rd_t_old if rd_t_old > 0 else 100,
+                        value=rd_c_old,
+                        key=f"edit_eiken_rd_correct_{edit_id}",
+                    )
+                    rd_rate_edit = (edit_rd_correct / rd_t_old * 100) if rd_t_old else 0
+                    st.caption(f"正答率：{rd_rate_edit:.1f} %")
+
+                    st.write(f"**Listening（全 {ls_t_old} 問中）**" if ls_t_old else "**Listening**")
+                    edit_ls_correct = st.number_input(
+                        "Listening 正解数（編集）",
+                        min_value=0,
+                        max_value=ls_t_old if ls_t_old > 0 else 100,
+                        value=ls_c_old,
+                        key=f"edit_eiken_ls_correct_{edit_id}",
+                    )
+                    ls_rate_edit = (edit_ls_correct / ls_t_old * 100) if ls_t_old else 0
+                    st.caption(f"正答率：{ls_rate_edit:.1f} %")
+
+                with col2_e:
+                    st.write(f"**Writing（満点 {wr_t_old} 点）**" if wr_t_old else "**Writing**")
+                    edit_wr_correct = st.number_input(
+                        "Writing 得点（編集）",
+                        min_value=0,
+                        max_value=wr_t_old if wr_t_old > 0 else 100,
+                        value=wr_c_old,
+                        key=f"edit_eiken_wr_correct_{edit_id}",
+                    )
+                    wr_rate_edit = (edit_wr_correct / wr_t_old * 100) if wr_t_old else 0
+                    st.caption(f"正答率：{wr_rate_edit:.1f} %")
+
+                    st.write(f"**Speaking（満点 {sp_t_old} 点）**" if sp_t_old else "**Speaking**")
+                    edit_sp_correct = st.number_input(
+                        "Speaking 得点（編集）",
+                        min_value=0,
+                        max_value=sp_t_old if sp_t_old > 0 else 100,
+                        value=sp_c_old,
+                        key=f"edit_eiken_sp_correct_{edit_id}",
+                    )
+                    sp_rate_edit = (edit_sp_correct / sp_t_old * 100) if sp_t_old else 0
+                    st.caption(f"正答率：{sp_rate_edit:.1f} %")
+
+                if st.button("この演習記録を更新", key=f"btn_update_eiken_{edit_id}"):
+                    # 新しい scores_json
+                    new_scores = {
+                        "reading":   {"correct": edit_rd_correct, "total": rd_t_old},
+                        "listening": {"correct": edit_ls_correct, "total": ls_t_old},
+                        "writing":   {"correct": edit_wr_correct, "total": wr_t_old},
+                        "speaking":  {"correct": edit_sp_correct, "total": sp_t_old},
+                    }
+
+                    eiken_all_for_update = get_eiken_df()
+                    if eiken_all_for_update.empty or "id" not in eiken_all_for_update.columns:
+                        st.error("英検データが見つかりませんでした。")
+                    else:
+                        eiken_all_for_update["id"] = eiken_all_for_update["id"].astype(str)
+                        mask_all = eiken_all_for_update["id"] == edit_id
+                        if not mask_all.any():
+                            st.error("対象の英検演習データが見つかりませんでした。")
+                        else:
+                            idx_all = eiken_all_for_update[mask_all].index[0]
+                            eiken_all_for_update.at[idx_all, "target_grade"] = edit_grade
+                            eiken_all_for_update.at[idx_all, "exam_date"] = edit_exam_date.isoformat()
+                            eiken_all_for_update.at[idx_all, "practice_date"] = edit_practice_date.isoformat()
+                            eiken_all_for_update.at[idx_all, "category"] = edit_category
+                            eiken_all_for_update.at[idx_all, "scores_json"] = json.dumps(
+                                new_scores, ensure_ascii=False
+                            )
+                            eiken_all_for_update.at[idx_all, "updated_at"] = datetime.now().isoformat()
+                            eiken_all_for_update.at[idx_all, "teacher_username"] = teacher_username
+                            eiken_all_for_update.at[idx_all, "teacher_name"] = teacher_name
+
+                            write_sheet_df("eiken_records", eiken_all_for_update)
+                            try:
+                                load_all_tables.clear()
+                            except Exception:
+                                pass
+                            try:
+                                load_sheet_df.clear()
+                            except Exception:
+                                pass
+
+                            st.success("英検演習記録を更新しました。")
+                            time.sleep(1)
+                            st.rerun()
 
         # ---------------- 削除 ----------------
         with st.expander("英検演習記録の削除"):
@@ -2189,7 +2744,7 @@ def page_parent_report():
             if tch_homework_list else 0
         )
 
-                # --- 英検情報 ---
+        # --- 英検情報 ---
         eiken_df_student = eiken_df[eiken_df["student_id"] == sid].sort_values("practice_date")
         has_eiken = not eiken_df_student.empty
 
