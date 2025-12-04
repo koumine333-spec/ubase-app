@@ -1,6 +1,8 @@
 streamlit
 pandas
 plotly
+pdfkit
+kaleido
 gspread
 google-auth
 google-auth-oauthlib

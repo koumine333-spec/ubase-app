@@ -10,8 +10,11 @@ import gspread
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 import streamlit_authenticator as stauth
 from google.oauth2 import service_account
+
+
 
 # =========================
 # Google Sheets 接続まわり
@@ -2595,23 +2598,35 @@ def page_eiken():
 # -----------------
 
 def page_parent_report():
+    import html
+    import json
+    import pandas as pd
+    import plotly.graph_objects as go
+    from datetime import date, datetime
+    import streamlit.components.v1 as components
+
+    # ---------- 入力エリア（Streamlit側UI。印刷対象ではない） ----------
+    st.markdown('<div class="no-print-input">', unsafe_allow_html=True)
+
     st.header("保護者報告作成")
 
     students_df = get_students_df()
     if students_df.empty:
         st.info("生徒が登録されていません。")
+        st.markdown('</div>', unsafe_allow_html=True)
         return
 
     # student_id を文字列に統一
     if "student_id" in students_df.columns:
         students_df["student_id"] = students_df["student_id"].astype(str)
 
-    # 印刷モード
+    # （任意）既存の印刷モード：サイドバー非表示など
     with st.expander("印刷モード（サイドバーを隠す）"):
         print_mode = st.checkbox("印刷モード（サイドバーとヘッダーを隠す）を有効にする")
         if print_mode:
             inject_print_mode_css()
 
+    # 生徒選択
     student_label = st.selectbox(
         "生徒を選択",
         [f'{row["student_id"]} : {row["name"]}' for _, row in students_df.iterrows()],
@@ -2628,367 +2643,595 @@ def page_parent_report():
 
     summary_comment = st.text_area("月次総括コメント（保護者向け）", height=120)
 
-    if st.button("レポートを生成", key="generate_report"):
-        # データ取得
-        coaching_df = get_coaching_df()
-        exam_df = get_exam_results_df()
-        eiken_df = get_eiken_df()
+    # レポート生成ボタン
+    generate_clicked = st.button("レポートを生成", key="generate_report")
 
-        sid = str(student_id)
+    st.markdown('</div>', unsafe_allow_html=True)  # 入力エリア終了
 
-        # 各テーブルの student_id を文字列に統一してから絞り込み
-        if not coaching_df.empty and "student_id" in coaching_df.columns:
-            coaching_df["student_id"] = coaching_df["student_id"].astype(str)
-            coaching_df = coaching_df[coaching_df["student_id"] == sid]
+    # ここから先は「レポートを生成」後だけ
+    if not generate_clicked:
+        return
 
-        if not exam_df.empty and "student_id" in exam_df.columns:
-            exam_df["student_id"] = exam_df["student_id"].astype(str)
+    # ---------- データ集計 ----------
+    sid = str(student_id)
 
-        if not eiken_df.empty and "student_id" in eiken_df.columns:
-            eiken_df["student_id"] = eiken_df["student_id"].astype(str)
+    coaching_df = get_coaching_df()
+    exam_df = get_exam_results_df()
+    eiken_df = get_eiken_df()
 
-        # 対象月の開始・終了
-        start_date = date(int(year), int(month), 1)
-        if month == 12:
-            end_date = date(int(year) + 1, 1, 1)
+    if not coaching_df.empty and "student_id" in coaching_df.columns:
+        coaching_df["student_id"] = coaching_df["student_id"].astype(str)
+        coaching_df = coaching_df[coaching_df["student_id"] == sid]
+
+    if not exam_df.empty and "student_id" in exam_df.columns:
+        exam_df["student_id"] = exam_df["student_id"].astype(str)
+
+    if not eiken_df.empty and "student_id" in eiken_df.columns:
+        eiken_df["student_id"] = eiken_df["student_id"].astype(str)
+
+    # 対象月の開始・終了
+    start_date = date(int(year), int(month), 1)
+    if month == 12:
+        end_date = date(int(year) + 1, 1, 1)
+    else:
+        end_date = date(int(year), int(month) + 1, 1)
+
+    # --- 日報の集計（この月の分） ---
+    records_month = []
+    for _, row in coaching_df.iterrows():
+        try:
+            d = datetime.fromisoformat(row["date"]).date()
+        except Exception:
+            continue
+        if start_date <= d < end_date:
+            records_month.append(row)
+
+    num_sessions = len(records_month)
+    total_hours = 0.0
+    stu_understanding_list = []
+    tch_homework_list = []
+    dates_list = []
+    stu_understanding_series = []
+    stu_goal_series = []
+    stu_motivation_series = []
+    tch_attitude_series = []
+    tch_homework_series = []
+    tch_prev_understand_series = []
+
+    for row in records_month:
+        d_str = row["date"]
+        try:
+            _ = datetime.fromisoformat(d_str).date()
+        except Exception:
+            continue
+
+        dates_list.append(d_str)
+
+        try:
+            se = json.loads(row.get("student_eval_json") or "{}")
+        except Exception:
+            se = {}
+        try:
+            te = json.loads(row.get("teacher_eval_json") or "{}")
+        except Exception:
+            te = {}
+        try:
+            schedule = json.loads(row.get("study_schedule_json") or "{}")
+        except Exception:
+            schedule = {}
+
+        # 生徒自己評価
+        u = se.get("理解度")
+        g = se.get("目標達成度")
+        m = se.get("モチベーション")
+        if isinstance(u, (int, float)):
+            stu_understanding_list.append(u)
+            stu_understanding_series.append((d_str, u))
         else:
-            end_date = date(int(year), int(month) + 1, 1)
+            stu_understanding_series.append((d_str, None))
+        if isinstance(g, (int, float)):
+            stu_goal_series.append((d_str, g))
+        else:
+            stu_goal_series.append((d_str, None))
+        if isinstance(m, (int, float)):
+            stu_motivation_series.append((d_str, m))
+        else:
+            stu_motivation_series.append((d_str, None))
 
-        # --- 日報の集計（この月の分） ---
-        records_month = []
-        for _, row in coaching_df.iterrows():
+        # 講師評価
+        att = te.get("授業態度")
+        hw = te.get("宿題完成度")
+        prevu = te.get("前回理解度")
+        if isinstance(hw, (int, float)):
+            tch_homework_list.append(hw)
+
+        tch_attitude_series.append((d_str, att if isinstance(att, (int, float)) else None))
+        tch_homework_series.append((d_str, hw if isinstance(hw, (int, float)) else None))
+        tch_prev_understand_series.append((d_str, prevu if isinstance(prevu, (int, float)) else None))
+
+        # 自習予定から時間合計
+        for _, hrs in schedule.items():
             try:
-                d = datetime.fromisoformat(row["date"]).date()
+                total_hours += float(hrs)
+            except Exception:
+                pass
+
+    avg_understanding = (
+        sum(stu_understanding_list) / len(stu_understanding_list)
+        if stu_understanding_list else 0
+    )
+    avg_homework = (
+        sum(tch_homework_list) / len(tch_homework_list)
+        if tch_homework_list else 0
+    )
+
+    # --- 英検情報 ---
+    eiken_df_student = eiken_df[eiken_df["student_id"] == sid].sort_values("practice_date")
+    has_eiken = not eiken_df_student.empty
+
+    current_target_grade = ""
+    current_exam_date = ""
+    month_eiken_rows = []
+
+    if has_eiken:
+        last = eiken_df_student.iloc[-1]
+        current_target_grade = last.get("target_grade", "")
+        current_exam_date = last.get("exam_date", "")
+
+        for _, row in eiken_df_student.iterrows():
+            try:
+                pd_ = datetime.fromisoformat(row["practice_date"]).date()
             except Exception:
                 continue
-            if start_date <= d < end_date:
-                records_month.append(row)
-
-        # サマリー用
-        num_sessions = len(records_month)
-        total_hours = 0.0
-        stu_understanding_list = []
-        tch_homework_list = []
-        dates_list = []
-        stu_understanding_series = []
-        stu_goal_series = []
-        stu_motivation_series = []
-        tch_attitude_series = []
-        tch_homework_series = []
-        tch_prev_understand_series = []
-
-        for row in records_month:
-            d_str = row["date"]
-            try:
-                d = datetime.fromisoformat(d_str).date()
-            except Exception:
+            if not (start_date <= pd_ < end_date):
                 continue
 
-            dates_list.append(d_str)
-
             try:
-                se = json.loads(row.get("student_eval_json") or "{}")
+                s = json.loads(row.get("scores_json") or "{}")
             except Exception:
-                se = {}
+                s = {}
+
+            def get_skill(skill_key: str):
+                info = s.get(skill_key, {}) or {}
+                c = info.get("correct", 0)
+                t = info.get("total", 0)
+                rate = (c / t * 100) if t else 0
+                return c, t, rate
+
+            rd_c, rd_t, rd_r = get_skill("reading")
+            ls_c, ls_t, ls_r = get_skill("listening")
+            wr_c, wr_t, wr_r = get_skill("writing")
+            sp_c, sp_t, sp_r = get_skill("speaking")
+
+            month_eiken_rows.append(
+                {
+                    "演習日": row.get("practice_date", ""),
+                    "内容": row.get("category", ""),
+                    "R正解数": rd_c,
+                    "R正答率(%)": round(rd_r, 1),
+                    "L正解数": ls_c,
+                    "L正答率(%)": round(ls_r, 1),
+                    "W得点": wr_c,
+                    "W正答率(%)": round(wr_r, 1),
+                    "S得点": sp_c,
+                    "S正答率(%)": round(sp_r, 1),
+                }
+            )
+
+    # --- 成績（入塾〜現在：グラフ用） ---
+    exam_df_stu_all = exam_df[exam_df["student_id"] == sid].copy()
+    if not exam_df_stu_all.empty:
+        exam_df_stu_all["date_dt"] = pd.to_datetime(exam_df_stu_all["date"], errors="coerce")
+        exam_df_stu_all = exam_df_stu_all.sort_values("date_dt")
+
+    # ---------- Plotly グラフを HTML に変換（カラー指定） ----------
+    fig1_html = ""
+    if dates_list:
+        x1 = [d for d, _ in stu_understanding_series]
+        y_u = [v for _, v in stu_understanding_series]
+        y_g = [v for _, v in stu_goal_series]
+        y_m = [v for _, v in stu_motivation_series]
+        fig1 = go.Figure()
+        fig1.add_trace(go.Scatter(
+            x=x1, y=y_u, mode="lines+markers", name="理解度",
+            line=dict(color="#1f77b4"), marker=dict(color="#1f77b4")
+        ))
+        fig1.add_trace(go.Scatter(
+            x=x1, y=y_g, mode="lines+markers", name="目標達成度",
+            line=dict(color="#2ca02c"), marker=dict(color="#2ca02c")
+        ))
+        fig1.add_trace(go.Scatter(
+            x=x1, y=y_m, mode="lines+markers", name="モチベーション",
+            line=dict(color="#ff7f0e"), marker=dict(color="#ff7f0e")
+        ))
+        fig1.update_layout(yaxis=dict(range=[0, 5]), legend_title="項目")
+        fig1_html = fig1.to_html(include_plotlyjs=False, full_html=False)
+
+    fig2_html = ""
+    if dates_list:
+        x2 = [d for d, _ in tch_attitude_series]
+        y_att = [v for _, v in tch_attitude_series]
+        y_hw = [v for _, v in tch_homework_series]
+        y_prev = [v for _, v in tch_prev_understand_series]
+        fig2 = go.Figure()
+        fig2.add_trace(go.Scatter(
+            x=x2, y=y_att, mode="lines+markers", name="授業態度",
+            line=dict(color="#9467bd"), marker=dict(color="#9467bd")
+        ))
+        fig2.add_trace(go.Scatter(
+            x=x2, y=y_hw, mode="lines+markers", name="宿題完成度",
+            line=dict(color="#8c564b"), marker=dict(color="#8c564b")
+        ))
+        fig2.add_trace(go.Scatter(
+            x=x2, y=y_prev, mode="lines+markers", name="前回理解度",
+            line=dict(color="#17becf"), marker=dict(color="#17becf")
+        ))
+        fig2.update_layout(yaxis=dict(range=[0, 5]), legend_title="項目")
+        fig2_html = fig2.to_html(include_plotlyjs=False, full_html=False)
+
+    fig_total_html = ""
+    if not exam_df_stu_all.empty:
+        dates_exam = []
+        total_scores = []
+        total_targets = []
+        for _, row in exam_df_stu_all.iterrows():
+            label = f'{row["date"]} {row["exam_name"]}'
+            dates_exam.append(label)
             try:
-                te = json.loads(row.get("teacher_eval_json") or "{}")
+                res = json.loads(row.get("results_json") or "{}")
             except Exception:
-                te = {}
-            try:
-                schedule = json.loads(row.get("study_schedule_json") or "{}")
-            except Exception:
-                schedule = {}
+                res = {}
+            t_score = 0
+            t_target = 0
+            for _, vals in res.items():
+                t_score += vals.get("score", 0)
+                t_target += vals.get("target", 0)
+            total_scores.append(t_score)
+            total_targets.append(t_target)
 
-            # 生徒自己評価
-            u = se.get("理解度")
-            g = se.get("目標達成度")
-            m = se.get("モチベーション")
-            if isinstance(u, (int, float)):
-                stu_understanding_list.append(u)
-                stu_understanding_series.append((d_str, u))
-            else:
-                stu_understanding_series.append((d_str, None))
-            if isinstance(g, (int, float)):
-                stu_goal_series.append((d_str, g))
-            else:
-                stu_goal_series.append((d_str, None))
-            if isinstance(m, (int, float)):
-                stu_motivation_series.append((d_str, m))
-            else:
-                stu_motivation_series.append((d_str, None))
+        fig_total = go.Figure()
+        fig_total.add_trace(go.Scatter(
+            x=dates_exam, y=total_scores,
+            mode="lines+markers", name="合計点",
+            line=dict(color="#1f77b4"), marker=dict(color="#1f77b4")
+        ))
+        fig_total.add_trace(go.Scatter(
+            x=dates_exam, y=total_targets,
+            mode="lines+markers", name="目標合計",
+            line=dict(color="#d62728", dash="dash"), marker=dict(color="#d62728")
+        ))
+        fig_total.update_layout(xaxis_title="テスト", yaxis_title="得点", legend_title="項目")
+        fig_total_html = fig_total.to_html(include_plotlyjs=False, full_html=False)
 
-            # 講師評価
-            att = te.get("授業態度")
-            hw = te.get("宿題完成度")
-            prevu = te.get("前回理解度")
-            if isinstance(hw, (int, float)):
-                tch_homework_list.append(hw)
-
-            tch_attitude_series.append((d_str, att if isinstance(att, (int, float)) else None))
-            tch_homework_series.append((d_str, hw if isinstance(hw, (int, float)) else None))
-            tch_prev_understand_series.append((d_str, prevu if isinstance(prevu, (int, float)) else None))
-
-            # 自習予定から時間合計
-            for _, hrs in schedule.items():
-                try:
-                    total_hours += float(hrs)
-                except Exception:
-                    pass
-
-        avg_understanding = (
-            sum(stu_understanding_list) / len(stu_understanding_list)
-            if stu_understanding_list else 0
-        )
-        avg_homework = (
-            sum(tch_homework_list) / len(tch_homework_list)
-            if tch_homework_list else 0
-        )
-
-        # --- 英検情報 ---
-        eiken_df_student = eiken_df[eiken_df["student_id"] == sid].sort_values("practice_date")
-        has_eiken = not eiken_df_student.empty
-
-        current_target_grade = ""
-        current_exam_date = ""
-        month_eiken_rows = []
-
-        if has_eiken:
-            last = eiken_df_student.iloc[-1]
-            current_target_grade = last.get("target_grade", "")
-            current_exam_date = last.get("exam_date", "")
-
-            # 対象月の演習記録（4技能）
-            for _, row in eiken_df_student.iterrows():
-                try:
-                    pd_ = datetime.fromisoformat(row["practice_date"]).date()
-                except Exception:
-                    continue
-
-                if not (start_date <= pd_ < end_date):
-                    continue
-
-                try:
-                    s = json.loads(row.get("scores_json") or "{}")
-                except Exception:
-                    s = {}
-
-                def get_skill(skill_key: str):
-                    """scores_json 内の {correct, total} から正解数と正答率を取り出す"""
-                    info = s.get(skill_key, {}) or {}
-                    c = info.get("correct", 0)
-                    t = info.get("total", 0)
-                    rate = (c / t * 100) if t else 0
-                    return c, t, rate
-
-                rd_c, rd_t, rd_r = get_skill("reading")
-                ls_c, ls_t, ls_r = get_skill("listening")
-                wr_c, wr_t, wr_r = get_skill("writing")
-                sp_c, sp_t, sp_r = get_skill("speaking")
-
-                month_eiken_rows.append(
-                    {
-                        "演習日": row.get("practice_date", ""),
-                        "内容": row.get("category", ""),
-                        "R正解数": rd_c,
-                        "R正答率(%)": round(rd_r, 1),
-                        "L正解数": ls_c,
-                        "L正答率(%)": round(ls_r, 1),
-                        "W得点": wr_c,
-                        "W正答率(%)": round(wr_r, 1),
-                        "S得点": sp_c,
-                        "S正答率(%)": round(sp_r, 1),
-                    }
-                )
-
-
-        # --- 成績（入塾〜現在：グラフ用） ---
-        exam_df_stu_all = exam_df[exam_df["student_id"] == sid].copy()
-        # グラフ用：日付を datetime に
-        if not exam_df_stu_all.empty:
-            exam_df_stu_all["date_dt"] = pd.to_datetime(exam_df_stu_all["date"], errors="coerce")
-            exam_df_stu_all = exam_df_stu_all.sort_values("date_dt")
-
-        # --- 成績（今年度：テーブル用） ---
-        exam_table_rows = []
+    # ---------- テストを「テスト毎の表」でHTML化 ----------
+    exam_table_html = ""
+    year_exam_rows = []
+    if not exam_df_stu_all.empty:
         for _, row in exam_df_stu_all.iterrows():
             try:
                 d = datetime.fromisoformat(row["date"]).date()
             except Exception:
                 continue
-            # 対象年のみ（例：2025年なら 2025-01-01〜2025-12-31）
-            if d.year != int(year):
-                continue
+            if d.year == int(year):
+                year_exam_rows.append(row)
+
+    if year_exam_rows:
+        parts = []
+        for row in year_exam_rows:
+            exam_label = f'{row["date"]} {row["exam_category"]} {row["exam_name"]}'
+            parts.append(
+                f'<h4 class="subsection-title">{html.escape(exam_label)}</h4>'
+            )
             try:
                 res = json.loads(row.get("results_json") or "{}")
             except Exception:
                 res = {}
+
+            if not res:
+                parts.append("<p>（科目データなし）</p>")
+                continue
+
+            subjects = []
+            targets = []
+            scores = []
             for subj, vals in res.items():
-                exam_table_rows.append({
-                    "日付": row["date"],
-                    "区分": row["exam_category"],
-                    "テスト名": row["exam_name"],
-                    "科目": subj,
-                    "目標": vals.get("target", 0),
-                    "得点": vals.get("score", 0),
-                })
+                subjects.append(subj)
+                targets.append(vals.get("target", 0))
+                scores.append(vals.get("score", 0))
 
-        # --- レポート表示 ---
-        st.markdown("### 保護者向けレポート")
+            df_exam = pd.DataFrame({
+                "科目": subjects,
+                "目標": targets,
+                "得点": scores,
+            })
+            parts.append(
+                df_exam.to_html(
+                    index=False,
+                    classes="score-table",
+                    border=0,
+                    justify="center",
+                    escape=False,
+                )
+            )
+        exam_table_html = "\n".join(parts)
+    else:
+        exam_table_html = "<p>今年度のテスト結果データがありません。</p>"
 
-        with st.container():
-            st.markdown('<div class="report-container">', unsafe_allow_html=True)
+    # ---------- 英検テーブル ----------
+    if month_eiken_rows:
+        eiken_table_df = pd.DataFrame(month_eiken_rows)
+        eiken_table_html = eiken_table_df.to_html(
+            index=False,
+            classes="score-table",
+            border=0,
+            justify="center",
+            escape=False,
+        )
+    else:
+        eiken_table_html = "<p>この月の英検演習記録はありません。</p>"
 
-            header_text = f"U-BASE 学習報告書 - {student_name} 様 - {year}年{month}月"
-            st.markdown(f'<div class="report-header">{header_text}</div>', unsafe_allow_html=True)
+    # コメント
+    summary_comment_html = html.escape(summary_comment).replace("\n", "<br>")
+    safe_student_name = html.escape(student_name)
 
-            # ① サマリー
-            st.markdown('<div class="report-section-title">① サマリー</div>', unsafe_allow_html=True)
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.write("**月間通塾回数**")
-                st.write(f"{num_sessions} 回")
-            with col2:
-                st.write("**月間総学習時間（予定）**")
-                st.write(f"{total_hours:.1f} 時間")
-            with col3:
-                st.write("**平均授業理解度**")
-                st.write(f"{avg_understanding:.2f} / 5")
-            with col4:
-                st.write("**平均宿題達成度**")
-                st.write(f"{avg_homework:.2f} / 5")
+    # ---------- レポート本体 HTML（report-root 内） ----------
+    sections = []
 
-            # ② 授業日報（生徒自己評価）
-            st.markdown('<div class="report-section-title">② 授業日報（生徒自己評価の推移）</div>', unsafe_allow_html=True)
-            if dates_list:
-                x = [d for d, _ in stu_understanding_series]
-                y_u = [v for _, v in stu_understanding_series]
-                y_g = [v for _, v in stu_goal_series]
-                y_m = [v for _, v in stu_motivation_series]
-                fig1 = go.Figure()
-                fig1.add_trace(go.Scatter(x=x, y=y_u, mode="lines+markers", name="理解度"))
-                fig1.add_trace(go.Scatter(x=x, y=y_g, mode="lines+markers", name="目標達成度"))
-                fig1.add_trace(go.Scatter(x=x, y=y_m, mode="lines+markers", name="モチベーション"))
-                fig1.update_layout(yaxis=dict(range=[0, 5]), legend_title="項目")
-                st.plotly_chart(fig1, use_container_width=True)
+    # ヘッダー
+    sections.append(
+        f'<div class="report-header">'
+        f'U-BASE 学習報告書 - {safe_student_name} 様 - {year}年{month}月'
+        f'</div>'
+    )
+
+    # ① サマリー
+    sections.append('<div class="report-section-title">① サマリー</div>')
+    sections.append(
+        f"""
+        <div class="summary-grid">
+          <div class="summary-item">
+            <div class="summary-label">月間通塾回数</div>
+            <div class="summary-value">{num_sessions} 回</div>
+          </div>
+          <div class="summary-item">
+            <div class="summary-label">月間総学習時間（予定）</div>
+            <div class="summary-value">{total_hours:.1f} 時間</div>
+          </div>
+          <div class="summary-item">
+            <div class="summary-label">平均授業理解度</div>
+            <div class="summary-value">{avg_understanding:.2f} / 5</div>
+          </div>
+          <div class="summary-item">
+            <div class="summary-label">平均宿題達成度</div>
+            <div class="summary-value">{avg_homework:.2f} / 5</div>
+          </div>
+        </div>
+        """
+    )
+
+    # ② 生徒自己評価
+    sections.append('<div class="report-section-title">② 授業日報（生徒自己評価の推移）</div>')
+    if fig1_html:
+        sections.append(fig1_html)
+    else:
+        sections.append("<p>この月の授業日報はありません。</p>")
+
+    # ③ 講師評価
+    sections.append('<div class="report-section-title">③ 授業日報（講師評価の推移）</div>')
+    if fig2_html:
+        sections.append(fig2_html)
+    else:
+        sections.append("<p>この月の授業日報はありません。</p>")
+
+    # ④ 成績推移
+    sections.append('<div class="report-section-title">④ 成績推移（入塾〜現在）</div>')
+    if fig_total_html:
+        sections.append(fig_total_html)
+    else:
+        sections.append("<p>テスト結果データがありません。</p>")
+
+    # 今年度テスト一覧（テスト毎の表）
+    sections.append('<h4 class="subsection-title">今年度のテスト結果一覧</h4>')
+    sections.append(exam_table_html)
+
+    # ⑤ 英検
+    if has_eiken:
+        sections.append('<div class="report-section-title">⑤ 英検対策状況</div>')
+
+        if current_target_grade:
+            if current_exam_date:
+                sections.append(
+                    f"<p><strong>現在の目標:</strong> "
+                    f"{html.escape(current_target_grade)} 合格 "
+                    f"(試験予定日: {html.escape(str(current_exam_date))})</p>"
+                )
             else:
-                st.write("この月の授業日報はありません。")
+                sections.append(
+                    f"<p><strong>現在の目標:</strong> "
+                    f"{html.escape(current_target_grade)} 合格 (試験予定日: 未設定)</p>"
+                )
+        else:
+            sections.append("<p>英検の目標級はまだ設定されていません。</p>")
 
-            # ③ 授業日報（講師評価）
-            st.markdown('<div class="report-section-title">③ 授業日報（講師評価の推移）</div>', unsafe_allow_html=True)
-            if dates_list:
-                x = [d for d, _ in tch_attitude_series]
-                y_att = [v for _, v in tch_attitude_series]
-                y_hw = [v for _, v in tch_homework_series]
-                y_prev = [v for _, v in tch_prev_understand_series]
-                fig2 = go.Figure()
-                fig2.add_trace(go.Scatter(x=x, y=y_att, mode="lines+markers", name="授業態度"))
-                fig2.add_trace(go.Scatter(x=x, y=y_hw, mode="lines+markers", name="宿題完成度"))
-                fig2.add_trace(go.Scatter(x=x, y=y_prev, mode="lines+markers", name="前回理解度"))
-                fig2.update_layout(yaxis=dict(range=[0, 5]), legend_title="項目")
-                st.plotly_chart(fig2, use_container_width=True)
-            else:
-                st.write("この月の授業日報はありません。")
+        sections.append('<h4 class="subsection-title">今月の英検演習記録（4技能）</h4>')
+        sections.append(eiken_table_html)
 
-            # ④ 成績推移（入塾〜現在＋今年度一覧）
-            st.markdown('<div class="report-section-title">④ 成績推移（入塾〜現在）</div>', unsafe_allow_html=True)
-            if not exam_df_stu_all.empty:
-                dates_exam = []
-                total_scores = []
-                total_targets = []
+    # ⑥ コメント
+    sections.append('<div class="report-section-title">⑥ 講師からのメッセージ</div>')
+    if summary_comment.strip():
+        sections.append(f"<p>{summary_comment_html}</p>")
+    else:
+        sections.append("<p>（コメント未入力）</p>")
 
-                for _, row in exam_df_stu_all.iterrows():
-                    label = f'{row["date"]} {row["exam_name"]}'
-                    dates_exam.append(label)
-                    try:
-                        res = json.loads(row.get("results_json") or "{}")
-                    except Exception:
-                        res = {}
-                    t_score = 0
-                    t_target = 0
-                    for _, vals in res.items():
-                        t_score += vals.get("score", 0)
-                        t_target += vals.get("target", 0)
-                    total_scores.append(t_score)
-                    total_targets.append(t_target)
+    report_body = "\n".join(sections)
 
-                fig_total = go.Figure()
-                fig_total.add_trace(go.Scatter(x=dates_exam, y=total_scores, mode="lines+markers", name="合計点"))
-                fig_total.add_trace(go.Scatter(x=dates_exam, y=total_targets, mode="lines+markers", name="目標合計", line=dict(dash="dash")))
-                fig_total.update_layout(xaxis_title="テスト", yaxis_title="得点", legend_title="項目")
-                st.plotly_chart(fig_total, use_container_width=True)
-            else:
-                st.write("テスト結果データがありません。")
+    # ---------- iframe 内CSS（カラー＋印刷設定） ----------
+    css_block = """
+<style>
+@page {
+  size: A4 portrait;
+  margin: 5mm 8mm;
+}
+body {
+  margin: 0;
+  padding: 16px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #f5f5f5;
+}
+.report-container {
+  max-width: 900px;
+  margin: 0 auto;
+  background: #ffffff;
+  padding: 24px 32px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  box-sizing: border-box;
+}
+.report-header {
+  font-size: 20px;
+  font-weight: 600;
+  margin-bottom: 16px;
+  border-bottom: 2px solid #4a90e2;
+  padding-bottom: 8px;
+}
+.report-section-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-top: 24px;
+  margin-bottom: 8px;
+  color: #333333;
+}
+.subsection-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-top: 16px;
+  margin-bottom: 4px;
+}
+.summary-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.summary-item {
+  flex: 1 1 200px;
+  background: #f5f7ff;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.summary-label {
+  font-size: 12px;
+  color: #555555;
+}
+.summary-value {
+  font-size: 16px;
+  font-weight: 600;
+  color: #222222;
+}
+.score-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+  margin-top: 4px;
+}
+.score-table th,
+.score-table td {
+  border: 1px solid #cccccc;
+  padding: 4px 6px;
+}
+.score-table th {
+  background: #eef3ff;
+  font-weight: 600;
+}
+.toolbar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.toolbar button {
+  padding: 6px 12px;
+  font-size: 13px;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  background: #4a90e2;
+  color: #ffffff;
+}
+.toolbar button.secondary {
+  background: #777777;
+}
+.toolbar button:hover {
+  opacity: 0.9;
+}
+.plotly-graph-div, .js-plotly-plot {
+  max-width: 100% !important;
+}
+@media print {
+  body {
+    background: #ffffff;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .toolbar {
+    display: none !important;
+  }
+}
+</style>
+"""
 
-            # 今年度のテスト一覧（テストごとの横向き表）
-            st.markdown("**今年度のテスト結果一覧**")
+    # ---------- iframe 全体 HTML（Plotly CDN + ボタン＋レポート） ----------
+    full_html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>保護者向けレポート</title>
+{css_block}
+<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+<body>
+<div class="toolbar">
+  <button onclick="openInNewTab()" type="button">別タブでレポートを表示</button>
+  <button class="secondary" onclick="window.print()" type="button">
+    このレポートをPDFで保存 / 印刷
+  </button>
+</div>
+<div id="report-root" class="report-container">
+{report_body}
+</div>
 
-            # exam_df_stu_all は「この生徒の全テスト」、そこから対象年だけ抽出
-            if not exam_df_stu_all.empty:
-                exam_df_year = []
-                for _, row in exam_df_stu_all.iterrows():
-                    try:
-                        d = datetime.fromisoformat(row["date"]).date()
-                    except Exception:
-                        continue
-                    if d.year == int(year):
-                        exam_df_year.append(row)
+<script>
+function openInNewTab() {{
+  const reportRoot = document.getElementById('report-root');
+  if (!reportRoot) {{
+    alert('レポートが見つかりません。');
+    return;
+  }}
+  const newWin = window.open('', '_blank');
+  if (!newWin) {{
+    alert('ポップアップがブロックされています。');
+    return;
+  }}
+  newWin.document.write(`<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>保護者向けレポート</title>
+{css_block}
+</head>
+<body>${{reportRoot.outerHTML}}</body>
+</html>`);
+  newWin.document.close();
+  newWin.focus();
+}}
+</script>
+</body>
+</html>
+"""
 
-                if not exam_df_year:
-                    st.write("今年度のテスト結果データがありません。")
-                else:
-                    for row in exam_df_year:
-                        exam_label = f'{row["date"]} {row["exam_category"]} {row["exam_name"]}'
-                        st.markdown(f"**{exam_label}**")
-
-                        try:
-                            res = json.loads(row.get("results_json") or "{}")
-                        except Exception:
-                            res = {}
-
-                        if not res:
-                            st.write("（科目データなし）")
-                            continue
-
-                        subjects = []
-                        scores = []
-                        for subj, vals in res.items():
-                            subjects.append(subj)
-                            scores.append(vals.get("score", 0))
-
-                        df_exam = pd.DataFrame([scores], columns=subjects)
-                        df_exam.index = ["得点"]
-                        st.table(df_exam)
-                        st.markdown("")
-            else:
-                st.write("今年度のテスト結果データがありません。")
-
-            # ⑤ 英検
-            if has_eiken:
-                st.markdown('<div class="report-section-title">⑤ 英検対策状況</div>', unsafe_allow_html=True)
-
-                if current_target_grade:
-                    if current_exam_date:
-                        st.write(f"**現在の目標:** {current_target_grade} 合格（試験予定日: {current_exam_date}）")
-                    else:
-                        st.write(f"**現在の目標:** {current_target_grade} 合格（試験予定日: 未設定）")
-                else:
-                    st.write("英検の目標級はまだ設定されていません。")
-
-                if month_eiken_rows:
-                    st.write("**今月の英検演習記録（4技能）**")
-                    st.dataframe(pd.DataFrame(month_eiken_rows), use_container_width=True)
-                else:
-                    st.write("この月の英検演習記録はありません。")
+    components.html(full_html, height=1100, scrolling=True)
 
 
-            # ⑥ コメント
-            st.markdown('<div class="report-section-title">⑥ 講師からのメッセージ</div>', unsafe_allow_html=True)
-            if summary_comment.strip():
-                st.write(summary_comment)
-            else:
-                st.write("（コメント未入力）")
 
-            st.markdown('</div>', unsafe_allow_html=True)
 
 # -----------------
 # 講師アカウント管理（master専用）
