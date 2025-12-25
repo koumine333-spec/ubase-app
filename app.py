@@ -55,10 +55,14 @@ SHEET_SCHEMAS = {
         "id",
         "student_id",
         "date",
-        "student_eval_json",   # {理解度, 目標達成度, モチベーション}
-        "teacher_eval_json",   # {授業態度, 宿題完成度, 前回理解度, コメント}
-        "study_schedule_json", # {曜日: 時間}
-        "study_targets_json",  # ["目標1", "目標2", "目標3"]
+        "student_eval_json",      # {理解度, 目標達成度, モチベーション}
+        "teacher_eval_json",      # {授業態度, 宿題完成度, 前回理解度, コメント}
+        "study_schedule_json",    # {曜日: 時間}
+        "study_targets_json",     # ["目標1", "目標2", "目標3"]
+
+        # ★追加（担当講師情報）
+        "teacher_username",
+        "teacher_name",
         "created_at",
     ],
     "eiken_records": [
@@ -1526,7 +1530,16 @@ def page_coaching():
 
     # ログイン中講師情報（誰が日報を書いたか保存）
     teacher_username = st.session_state.get("username", "")
-    teacher_name = st.session_state.get("name", "")
+    login_teacher_name = st.session_state.get("name", "")
+
+    # ★ 追加：日報に記載する講師名を入力（空ならログイン名を採用）
+    input_teacher_name = st.text_input(
+        "担当講師名（この日報に記載する名前）",
+        value=login_teacher_name,
+        help="空欄の場合はログイン中の講師名が自動で保存されます。",
+        key="coaching_teacher_name_input",
+    )
+    teacher_name_to_save = (input_teacher_name or "").strip() or (login_teacher_name or "").strip()
 
     students_df = get_students_df()
     if students_df.empty:
@@ -1697,7 +1710,7 @@ def page_coaching():
             coaching_df_all.at[idx, "study_targets_json"] = json.dumps(targets_list, ensure_ascii=False)
             coaching_df_all.at[idx, "updated_at"] = now_str
             coaching_df_all.at[idx, "teacher_username"] = teacher_username
-            coaching_df_all.at[idx, "teacher_name"] = teacher_name
+            coaching_df_all.at[idx, "teacher_name"] = teacher_name_to_save
             msg = "同日のデータが存在したため、上書き保存しました。"
             show = st.warning
         else:
@@ -1727,7 +1740,7 @@ def page_coaching():
                 "created_at": now_str,
                 "updated_at": now_str,
                 "teacher_username": teacher_username,
-                "teacher_name": teacher_name,
+                "teacher_name": teacher_name_to_save,
             }
             coaching_df_all = pd.concat([coaching_df_all, pd.DataFrame([new_row])], ignore_index=True)
             msg = "保存しました。"
@@ -1771,6 +1784,7 @@ def page_coaching():
         edit_options = [
             f'{row["id"]} : {row["date"]}' for _, row in coaching_df_student.iterrows()
         ]
+
         selected_edit = st.selectbox(
             "編集する日報を選択",
             [""] + edit_options,
@@ -1782,6 +1796,18 @@ def page_coaching():
             target_row = coaching_df_student[coaching_df_student["id"] == edit_id].iloc[0]
 
             st.markdown("### 日報内容を編集")
+
+            # ここから下はこの if の中身なので、全部この深さでOK
+            existing_teacher_name = (target_row.get("teacher_name", "") or "").strip()
+            edit_teacher_name = st.text_input(
+                "担当講師名（編集）",
+                value=existing_teacher_name or (st.session_state.get("name", "") or ""),
+                key=f"edit_teacher_name_{edit_id}",
+            )
+            edit_teacher_name_to_save = (
+                (edit_teacher_name or "").strip()
+                or (st.session_state.get("name", "") or "").strip()
+            )
 
             # 日付（編集）
             try:
@@ -1956,8 +1982,13 @@ def page_coaching():
                             edit_targets_list, ensure_ascii=False
                         )
                         coaching_all.at[idx_all, "updated_at"] = datetime.now().isoformat()
+                        # ---- ここを追加（teacher_name列が無いと保存されない問題の保険）----
+                        for col in ["teacher_name", "teacher_username"]:
+                            if col not in coaching_all.columns:
+                                coaching_all[col] = ""
+                        # ★ ここが修正：講師名を入力値で保存
                         coaching_all.at[idx_all, "teacher_username"] = teacher_username
-                        coaching_all.at[idx_all, "teacher_name"] = teacher_name
+                        coaching_all.at[idx_all, "teacher_name"] = edit_teacher_name_to_save
 
                         write_sheet_df("coaching_reports", coaching_all)
                         try:
@@ -1973,16 +2004,33 @@ def page_coaching():
                         time.sleep(1)
                         st.rerun()
 
+
+
+
     # ------------- 過去の日報履歴（閲覧）-------------
     st.markdown("---")
     st.subheader("過去の日報履歴")
 
     coaching_df = get_coaching_df()
+
     if not coaching_df.empty and "student_id" in coaching_df.columns:
         coaching_df["student_id"] = coaching_df["student_id"].astype(str)
-        coaching_df_student = coaching_df[coaching_df["student_id"] == str(student_id)].sort_values(
-            "date", ascending=False
+
+        coaching_df_student = (
+            coaching_df[coaching_df["student_id"] == str(student_id)]
+            .copy()
         )
+
+        # date が文字列でも安全に並び替えできるように
+        if "date" in coaching_df_student.columns:
+            coaching_df_student["_date_sort"] = pd.to_datetime(
+                coaching_df_student["date"], errors="coerce"
+            )
+            coaching_df_student = coaching_df_student.sort_values(
+                "_date_sort", ascending=False
+            ).drop(columns=["_date_sort"], errors="ignore")
+        else:
+            coaching_df_student = coaching_df_student.sort_index(ascending=False)
     else:
         coaching_df_student = pd.DataFrame()
 
@@ -1990,8 +2038,21 @@ def page_coaching():
         st.info("この生徒の日報はまだ登録されていません。")
     else:
         for _, row in coaching_df_student.iterrows():
-            d = row["date"]
+            d = (row.get("date", "") or "").strip()
             st.markdown(f"### {d} の日報")
+
+            # 担当講師（teacher_name -> teacher_username の順で表示）
+            t_name = row.get("teacher_name", None)
+            t_user = row.get("teacher_username", None)
+
+            t_name = "" if (t_name is None or pd.isna(t_name)) else str(t_name).strip()
+            t_user = "" if (t_user is None or pd.isna(t_user)) else str(t_user).strip()
+
+            teacher_disp = t_name or t_user
+            if teacher_disp:
+                st.caption(f"担当講師：{teacher_disp}")
+            else:
+                st.caption("担当講師：（未設定）")
 
             # JSON → 辞書
             try:
@@ -2023,12 +2084,8 @@ def page_coaching():
             st.markdown("**講師コメント**")
             st.write(te.get("コメント", "（コメントなし）"))
 
-            # 担当講師（保存されていれば表示）
-            t_name = row.get("teacher_name", "")
-            if t_name:
-                st.caption(f"担当講師：{t_name}")
-
             st.markdown("---")
+
 
     # ------------- 日報削除 -------------
     with st.expander("日報の削除"):
@@ -3422,3 +3479,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
